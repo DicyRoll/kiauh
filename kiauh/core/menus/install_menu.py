@@ -16,6 +16,7 @@ from components.klipperscreen.klipperscreen import install_klipperscreen
 from components.mobileraker.mobileraker import install_mobileraker
 from components.moonraker import moonraker_setup
 from components.octoeverywhere.octoeverywhere_setup import install_octoeverywhere
+from components.spoolman.spoolman import install_spoolman
 from components.webui_client import client_setup
 from components.webui_client.client_config import client_config_setup
 from components.webui_client.fluidd_data import FluiddData
@@ -51,6 +52,7 @@ class InstallMenu(BaseMenu):
             "8": Option(method=self.install_mobileraker, menu=False),
             "9": Option(method=self.install_crowsnest, menu=False),
             "10": Option(method=self.install_octoeverywhere, menu=False),
+            "11": Option(method=self.install_spoolman, menu=False),
         }
 
     def print_menu(self):
@@ -108,3 +110,6 @@ class InstallMenu(BaseMenu):
 
     def install_octoeverywhere(self, **kwargs):
         install_octoeverywhere()
+
+    def install_spoolman(self, **kwargs):
+        install_spoolman()
