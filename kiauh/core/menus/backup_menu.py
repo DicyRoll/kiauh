@@ -16,6 +16,7 @@ from components.moonraker.moonraker_utils import (
     backup_moonraker_db_dir,
     backup_moonraker_dir,
 )
+from components.spoolman.spoolman import backup_spoolman_dir
 from components.webui_client.client_utils import (
     backup_client_config_data,
     backup_client_data,
@@ -53,6 +54,7 @@ class BackupMenu(BaseMenu):
             "7": Option(method=self.backup_mainsail_config, menu=False),
             "8": Option(method=self.backup_fluidd_config, menu=False),
             "9": Option(method=self.backup_klipperscreen, menu=False),
+            "10": Option(method=self.backup_spoolman, menu=False),
         }
 
     def print_menu(self):
@@ -74,8 +76,8 @@ class BackupMenu(BaseMenu):
             ║  4) [Moonraker Database]  │ Touchscreen GUI:          ║
             ║                           │  9) [KlipperScreen]       ║
             ║ Webinterface:             │                           ║
-            ║  5) [Mainsail]            │                           ║
-            ║  6) [Fluidd]              │                           ║
+            ║  5) [Mainsail]            │ Spool Manager:            ║
+            ║  6) [Fluidd]              │  10) [Spoolman]           ║
             ╟───────────────────────────┴───────────────────────────╢
             """
         )[1:]
@@ -107,3 +109,6 @@ class BackupMenu(BaseMenu):
 
     def backup_klipperscreen(self, **kwargs):
         backup_klipperscreen_dir()
+
+    def backup_spoolman(self, **kwargs):
+        backup_spoolman_dir()
