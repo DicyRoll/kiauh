@@ -134,6 +134,11 @@ def remove_spoolman() -> None:
     Logger.print_ok("Spoolman successfully removed!")
 
 
+def backup_spoolman_dir() -> None:
+    bm = BackupManager()
+    bm.backup_directory("spoolman", SPOOLMAN_DIR, SPOOLMAN_BACKUP_DIR)
+    bm.backup_directory("spoolman-db", SPOOLMAN_DB_DIR, SPOOLMAN_BACKUP_DIR)
+
 
 def setup_spoolman_dir() -> None:
     Logger.print_status("Downloading Spoolman...")
