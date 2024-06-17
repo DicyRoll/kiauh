@@ -28,6 +28,7 @@ from components.octoeverywhere.octoeverywhere_setup import (
     get_octoeverywhere_status,
     update_octoeverywhere,
 )
+from components.spoolman.spoolman import get_spoolman_status, update_spoolman
 from components.webui_client.client_config.client_config_setup import (
     update_client_config,
 )
@@ -68,6 +69,7 @@ class UpdateMenu(BaseMenu):
         self.mobileraker_local = self.mobileraker_remote = ""
         self.crowsnest_local = self.crowsnest_remote = ""
         self.octoeverywhere_local = self.octoeverywhere_remote = ""
+        self.spoolman_local = self.spoolman_remote = ""
 
         self.mainsail_data = MainsailData()
         self.fluidd_data = FluiddData()
@@ -100,11 +102,12 @@ class UpdateMenu(BaseMenu):
             "4": Option(self.update_fluidd, menu=False),
             "5": Option(self.update_mainsail_config, menu=False),
             "6": Option(self.update_fluidd_config, menu=False),
-            "7": Option(self.update_klipperscreen, menu=False),
-            "8": Option(self.update_mobileraker, menu=False),
-            "9": Option(self.update_crowsnest, menu=False),
-            "10": Option(self.update_octoeverywhere, menu=False),
-            "11": Option(self.upgrade_system_packages, menu=False),
+            "7": Option(self.update_spoolman, menu=False),
+            "8": Option(self.update_klipperscreen, menu=False),
+            "9": Option(self.update_mobileraker, menu=False),
+            "10": Option(self.update_crowsnest, menu=False),
+            "11": Option(self.update_octoeverywhere, menu=False),
+            "12": Option(self.upgrade_system_packages, menu=False),
         }
 
     def print_menu(self):
@@ -136,6 +139,9 @@ class UpdateMenu(BaseMenu):
             ║ Client-Config:        ├───────────────┼───────────────╢
             ║  5) Mainsail-Config   │ {self.mainsail_config_local:<22} │ {self.mainsail_config_remote:<22} ║
             ║  6) Fluidd-Config     │ {self.fluidd_config_local:<22} │ {self.fluidd_config_remote:<22} ║
+            ║                       │               │               ║
+            ║ Spool Manager:        ├───────────────┼───────────────║
+            ║  7) Spoolman          │ {self.spoolman_local:<22} │ {self.spoolman_remote:<22} ║
             ║                       │               │               ║
             ║ Other:                ├───────────────┼───────────────╢
             ║  7) KlipperScreen     │ {self.klipperscreen_local:<22} │ {self.klipperscreen_remote:<22} ║
@@ -192,6 +198,9 @@ class UpdateMenu(BaseMenu):
         if self._check_is_installed("octoeverywhere"):
             update_octoeverywhere()
 
+    def update_spoolman(self, **kwargs):
+        update_spoolman()
+
     def upgrade_system_packages(self, **kwargs): ...
 
     def _fetch_update_status(self):
@@ -209,6 +218,7 @@ class UpdateMenu(BaseMenu):
         self._set_status_data("mobileraker", get_mobileraker_status)
         self._set_status_data("crowsnest", get_crowsnest_status)
         self._set_status_data("octoeverywhere", get_octoeverywhere_status)
+        self._set_status_data("spoolman", get_spoolman_status)
 
     def _format_local_status(self, local_version, remote_version) -> str:
         color = COLOR_RED
