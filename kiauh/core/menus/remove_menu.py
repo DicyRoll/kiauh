@@ -18,6 +18,7 @@ from components.moonraker.menus.moonraker_remove_menu import (
     MoonrakerRemoveMenu,
 )
 from components.octoeverywhere.octoeverywhere_setup import remove_octoeverywhere
+from components.spoolman.spoolman import remove_spoolman
 from components.webui_client.fluidd_data import FluiddData
 from components.webui_client.mainsail_data import MainsailData
 from components.webui_client.menus.client_remove_menu import ClientRemoveMenu
@@ -50,6 +51,7 @@ class RemoveMenu(BaseMenu):
             "6": Option(method=self.remove_mobileraker, menu=True),
             "7": Option(method=self.remove_crowsnest, menu=True),
             "8": Option(method=self.remove_octoeverywhere, menu=True),
+            "9": Option(method=self.remove_spoolman, menu=True),
         }
 
     def print_menu(self):
@@ -101,3 +103,6 @@ class RemoveMenu(BaseMenu):
 
     def remove_octoeverywhere(self, **kwargs):
         remove_octoeverywhere()
+
+    def remove_spoolman(self, **kwargs):
+        remove_spoolman()

@@ -107,6 +107,33 @@ def update_spoolman() -> None:
     shutil.rmtree(f"{SPOOLMAN_DIR}.old")
 
 
+def remove_spoolman() -> None:
+    if Path(SPOOLMAN_DIR).exists():
+        Logger.print_status("Removing spoolman service ...")
+        cmd_sysctl_service("Spoolman", "stop")
+        cmd_sysctl_service("Spoolman", "disable")
+        remove_with_sudo(f"{SYSTEMD}/Spoolman.service")
+        Logger.print_status("Removing service removed!")
+
+        Logger.print_status("Removing spoolman directory ...")
+        shutil.rmtree(SPOOLMAN_DIR)
+        Logger.print_status("Directory removed!")
+
+    if Path(SPOOLMAN_DB_DIR).exists():
+        Logger.print_status("Removing spoolman database ...")
+        shutil.rmtree(SPOOLMAN_DB_DIR)
+        Logger.print_status("Database removed!")
+
+    mr_instances: List[Moonraker] = InstanceManager(Moonraker).instances
+    if mr_instances:
+        remove_config_section("spoolman", mr_instances)
+        remove_config_section("update_manager Spoolman", mr_instances)
+
+    cmd_sysctl_service("moonraker", "restart")
+
+    Logger.print_ok("Spoolman successfully removed!")
+
+
 
 def setup_spoolman_dir() -> None:
     Logger.print_status("Downloading Spoolman...")
