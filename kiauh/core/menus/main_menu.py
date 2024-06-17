@@ -16,6 +16,7 @@ from components.klipperscreen.klipperscreen import get_klipperscreen_status
 from components.log_uploads.menus.log_upload_menu import LogUploadMenu
 from components.mobileraker.mobileraker import get_mobileraker_status
 from components.moonraker.moonraker_utils import get_moonraker_status
+from components.spoolman.spoolman import get_spoolman_status
 from components.webui_client.client_utils import (
     get_client_status,
     get_current_client_config,
@@ -53,7 +54,7 @@ class MainMenu(BaseMenu):
 
         self.kl_status = self.kl_repo = self.mr_status = self.mr_repo = ""
         self.ms_status = self.fl_status = self.ks_status = self.mb_status = ""
-        self.cn_status = self.cc_status = ""
+        self.cn_status = self.cc_status = self.sm_status = ""
         self.init_status()
 
     def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
@@ -90,6 +91,7 @@ class MainMenu(BaseMenu):
         self._get_component_status("ks", get_klipperscreen_status)
         self._get_component_status("mb", get_mobileraker_status)
         self._get_component_status("cn", get_crowsnest_status)
+        self._get_component_status("sm", get_spoolman_status)
 
     def _get_component_status(self, name: str, status_fn: callable, *args) -> None:
         status_data: ComponentStatus = status_fn(*args)
@@ -141,6 +143,7 @@ class MainMenu(BaseMenu):
             | Community:       |   KlipperScreen: {self.ks_status:<{pad2}} |
             |  E) [Extensions] |     Mobileraker: {self.mb_status:<{pad2}} |
             |                  |       Crowsnest: {self.cn_status:<{pad2}} |
+            |                  |        Spollman: {self.sm_status:<{pad2}} |
             |-------------------------------------------------------|
             | {COLOR_CYAN}{footer1:^16}{RESET_FORMAT} | {footer2:^43} |
             """
