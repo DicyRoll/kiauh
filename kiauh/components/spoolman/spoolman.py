@@ -88,6 +88,26 @@ def install_spoolman() -> None:
     cmd_sysctl_service("moonraker", "restart")
 
 
+def update_spoolman() -> None:
+    if not Path(SPOOLMAN_DIR).exists():
+        Logger.print_info("Spoolman is not installed! Skipping ...")
+        return
+
+    cmd_sysctl_service("Spoolman", "stop")
+    cmd_sysctl_service("Spoolman", "disable")
+
+    Logger.print_status("Updating Spoolman ...")
+
+    shutil.move(SPOOLMAN_DIR, f"{SPOOLMAN_DIR}.old")
+    setup_spoolman_dir()
+    # copy old .env
+    shutil.copy(f"{SPOOLMAN_DIR}.old/.env", f"{SPOOLMAN_DIR}/.env")
+    start_install_script()
+
+    shutil.rmtree(f"{SPOOLMAN_DIR}.old")
+
+
+
 def setup_spoolman_dir() -> None:
     Logger.print_status("Downloading Spoolman...")
 
@@ -111,3 +131,22 @@ def start_install_script() -> None:
     chdir(kiauh_dir)
 
 
+def get_spoolman_status() -> ComponentStatus:
+    status = get_install_status(
+        SPOOLMAN_DIR,
+        files=[
+            Path(SPOOLMAN_DB_DIR),
+            Path(f"{SYSTEMD}/Spoolman.service"),
+        ],
+    )
+
+    if Path(SPOOLMAN_DIR).exists():
+        with open(Path(SPOOLMAN_DIR) / "release_info.json") as f:
+            data = json.load(f)
+        local_version = data["version"]
+        status["local"] = local_version
+
+    remote_version = get_latest_tag("Donkie/Spoolman")
+    status["remote"] = remote_version
+
+    return status

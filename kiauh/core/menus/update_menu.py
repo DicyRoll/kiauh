@@ -25,6 +25,7 @@ from components.mobileraker.mobileraker import (
 )
 from components.moonraker.moonraker_setup import update_moonraker
 from components.moonraker.moonraker_utils import get_moonraker_status
+from components.spoolman.spoolman import get_spoolman_status, update_spoolman
 from components.webui_client.client_config.client_config_setup import (
     update_client_config,
 )
@@ -57,7 +58,7 @@ class UpdateMenu(BaseMenu):
         self.ms_local = self.ms_remote = self.fl_local = self.fl_remote = ""
         self.mc_local = self.mc_remote = self.fc_local = self.fc_remote = ""
         self.ks_local = self.ks_remote = self.mb_local = self.mb_remote = ""
-        self.cn_local = self.cn_remote = ""
+        self.cn_local = self.cn_remote = self.sm_local = self.sm_remote = ""
 
         self.mainsail_data = MainsailData()
         self.fluidd_data = FluiddData()
@@ -79,10 +80,11 @@ class UpdateMenu(BaseMenu):
             "4": Option(self.update_fluidd, menu=False),
             "5": Option(self.update_mainsail_config, menu=False),
             "6": Option(self.update_fluidd_config, menu=False),
-            "7": Option(self.update_klipperscreen, menu=False),
-            "8": Option(self.update_mobileraker, menu=False),
-            "9": Option(self.update_crowsnest, menu=False),
-            "10": Option(self.upgrade_system_packages, menu=False),
+            "7": Option(self.update_spoolman, menu=False),
+            "8": Option(self.update_klipperscreen, menu=False),
+            "9": Option(self.update_mobileraker, menu=False),
+            "10": Option(self.update_crowsnest, menu=False),
+            "11": Option(self.upgrade_system_packages, menu=False),
         }
 
     def print_menu(self):
@@ -110,12 +112,15 @@ class UpdateMenu(BaseMenu):
             |  5) Mainsail-Config   | {self.mc_local:<22} | {self.mc_remote:<22} |
             |  6) Fluidd-Config     | {self.fc_local:<22} | {self.fc_remote:<22} |
             |                       |               |               |
+            | Spool Manager:        |---------------|---------------|
+            |  7) Spoolman          | {self.sm_local:<22} | {self.sm_remote:<22} |
+            |                       |               |               |
             | Other:                |---------------|---------------|
-            |  7) KlipperScreen     | {self.ks_local:<22} | {self.ks_remote:<22} |
-            |  8) Mobileraker       | {self.mb_local:<22} | {self.mb_remote:<22} |
-            |  9) Crowsnest         | {self.cn_local:<22} | {self.cn_remote:<22} |
+            |  8) KlipperScreen     | {self.ks_local:<22} | {self.ks_remote:<22} |
+            |  9) Mobileraker       | {self.mb_local:<22} | {self.mb_remote:<22} |
+            | 10) Crowsnest         | {self.cn_local:<22} | {self.cn_remote:<22} |
             |                       |-------------------------------|
-            | 10) System            |                               |
+            | 11) System            |                               |
             """
         )[1:]
         print(menu, end="")
@@ -150,6 +155,9 @@ class UpdateMenu(BaseMenu):
     def update_crowsnest(self, **kwargs):
         update_crowsnest()
 
+    def update_spoolman(self, **kwargs):
+        update_spoolman()
+
     def upgrade_system_packages(self, **kwargs): ...
 
     def _fetch_update_status(self):
@@ -171,6 +179,8 @@ class UpdateMenu(BaseMenu):
         self._get_update_status("mb", get_mobileraker_status)
         # crowsnest
         self._get_update_status("cn", get_crowsnest_status)
+        # spoolman
+        self._get_update_status("sm", get_spoolman_status)
 
     def _format_local_status(self, local_version, remote_version) -> str:
         if local_version == remote_version:
