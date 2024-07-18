@@ -32,12 +32,12 @@ from utils.config_utils import (
 from utils.constants import SYSTEMD
 from utils.fs_utils import remove_with_sudo, unzip
 from utils.git_utils import get_latest_tag
-from utils.input_utils import get_confirm
+from utils.input_utils import get_confirm, get_number_input
 from utils.logger import Logger
 from utils.sys_utils import cmd_sysctl_service, download_file, get_ipv4_addr
 from utils.types import ComponentStatus
 
-spoolman_port: int = 7912
+spoolman_port: int
 spoolman_db: str = ""
 
 
@@ -62,6 +62,9 @@ def install_spoolman() -> None:
         return
 
     if mr_instances and get_confirm("Enable Moonraker integration?"):
+        spoolman_port = get_number_input(
+            "Select Spoolman port:", 1024, 65535, 7912)
+
         add_config_section(
             "spoolman",
             mr_instances,
