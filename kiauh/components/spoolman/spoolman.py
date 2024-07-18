@@ -83,7 +83,7 @@ def install_spoolman() -> None:
                 ("path", str(SPOOLMAN_DIR)),
                 ("virtualenv", ".venv"),
                 ("requirements", "requirements.txt"),
-                ("persistent_files", "\n.venv\n.env"),
+                ("persistent_files", ".venv\n.env"),
                 ("managed_services", "Spoolman"),
             ],
         )
