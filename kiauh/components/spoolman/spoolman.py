@@ -178,7 +178,7 @@ def get_spoolman_status() -> ComponentStatus:
         local_version = data["version"]
         status.local = local_version
 
-    remote_version = get_latest_tag("Donkie/Spoolman")
-    status.remote = remote_version
+        remote_version = get_latest_tag("Donkie/Spoolman")
+        status.remote = remote_version
 
     return status
