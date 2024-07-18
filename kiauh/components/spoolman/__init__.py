@@ -11,7 +11,7 @@ from pathlib import Path
 
 from core.backup_manager import BACKUP_ROOT_DIR
 
-SPOOLMAN_DIR = Path.home().joinpath("spoolman")
+SPOOLMAN_DIR = Path.home().joinpath("Spoolman")
 SPOOLMAN_DB_DIR = Path.home().joinpath(".local/share/spoolman")
 SPOOLMAN_REPO = "https://github.com/Donkie/Spoolman/releases"
 SPOOLMAN_BACKUP_DIR = BACKUP_ROOT_DIR.joinpath("spoolman-backups")
