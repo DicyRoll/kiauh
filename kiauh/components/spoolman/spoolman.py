@@ -9,6 +9,7 @@
 
 
 import json
+import re
 import shutil
 from os import chdir, getcwd
 from pathlib import Path
@@ -61,10 +62,16 @@ def install_spoolman() -> None:
         Logger.print_error(f"Something went wrong! Please try again...\n{e}")
         return
 
-    if mr_instances and get_confirm("Enable Moonraker integration?"):
-        spoolman_port = get_number_input(
-            "Select Spoolman port:", 1024, 65535, 7912)
+    # set custom port
+    spoolman_port = get_number_input(
+        "Select Spoolman port:", 1024, 65535, 7912)
+    with open(f"{SPOOLMAN_DIR}/.env", "r+") as f:
+        content = f.read()
+        content = re.sub(r'SPOOLMAN_PORT=\d+', f'SPOOLMAN_PORT={spoolman_port}', content)
+        f.seek(0)
+        f.write(content)
 
+    if mr_instances and get_confirm("Enable Moonraker integration?"):
         add_config_section(
             "spoolman",
             mr_instances,
