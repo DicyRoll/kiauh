@@ -65,16 +65,20 @@ class RemoveMenu(BaseMenu):
             ╟───────────────────────────────────────────────────────╢
             ║ INFO: Configurations and/or any backups will be kept! ║
             ╟───────────────────────────┬───────────────────────────╢
-            ║ Firmware & API:           │ Android / iOS:            ║
-            ║  1) [Klipper]             │  6) [Mobileraker]         ║
+            ║ Firmware & API:           │ Webcam Streamer:          ║
+            ║  1) [Klipper]             │  7) [Crowsnest]           ║
             ║  2) [Moonraker]           │                           ║
-            ║                           │ Webcam Streamer:          ║
-            ║ Klipper Webinterface:     │  7) [Crowsnest]           ║
+            ║                           │ Remote Access:            ║
+            ║ Klipper Webinterface:     │  8) [OctoEverywhere]      ║
             ║  3) [Mainsail]            │                           ║
-            ║  4) [Fluidd]              │ Remote Access:            ║
-            ║                           │  8) [OctoEverywhere]      ║
+            ║  4) [Fluidd]              │ Spool Manager:            ║
+            ║                           │  9) [Spoolman]            ║
             ║ Touchscreen GUI:          │                           ║
             ║  5) [KlipperScreen]       │                           ║
+            ║                           │                           ║
+            ║ Android / iOS:            │                           ║
+            ║  6) [Mobileraker]         │                           ║
+            ║                           │                           ║
             ╟───────────────────────────┴───────────────────────────╢
             """
         )[1:]

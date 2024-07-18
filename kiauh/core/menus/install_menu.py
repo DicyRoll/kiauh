@@ -64,17 +64,20 @@ class InstallMenu(BaseMenu):
             ╔═══════════════════════════════════════════════════════╗
             ║ {color}{header:~^{count}}{RESET_FORMAT} ║
             ╟───────────────────────────┬───────────────────────────╢
-            ║ Firmware & API:           │ Touchscreen GUI:          ║
-            ║  1) [Klipper]             │  7) [KlipperScreen]       ║
+            ║ Firmware & API:           │ Android / iOS:            ║
+            ║  1) [Klipper]             │  8) [Mobileraker]         ║
             ║  2) [Moonraker]           │                           ║
-            ║                           │ Android / iOS:            ║
-            ║ Webinterface:             │  8) [Mobileraker]         ║
+            ║                           │ Webcam Streamer:          ║
+            ║ Webinterface:             │  9) [Crowsnest]           ║
             ║  3) [Mainsail]            │                           ║
-            ║  4) [Fluidd]              │ Webcam Streamer:          ║
-            ║                           │  9) [Crowsnest]           ║
+            ║  4) [Fluidd]              │ Remote Access:            ║
+            ║                           │ 10) [OctoEverywhere]      ║
             ║ Client-Config:            │                           ║
-            ║  5) [Mainsail-Config]     │ Remote Access:            ║
-            ║  6) [Fluidd-Config]       │ 10) [OctoEverywhere]      ║
+            ║  5) [Mainsail-Config]     │ Spool Manager:            ║
+            ║  6) [Fluidd-Config]       │ 11) [Spoolman]            ║
+            ║                           │                           ║
+            ║ Touchscreen GUI:          │                           ║
+            ║  7) [KlipperScreen]       │                           ║
             ║                           │                           ║
             ╟───────────────────────────┴───────────────────────────╢
             """
