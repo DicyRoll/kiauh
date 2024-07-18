@@ -176,9 +176,9 @@ def get_spoolman_status() -> ComponentStatus:
         with open(Path(SPOOLMAN_DIR) / "release_info.json") as f:
             data = json.load(f)
         local_version = data["version"]
-        status["local"] = local_version
+        status.local = local_version
 
     remote_version = get_latest_tag("Donkie/Spoolman")
-    status["remote"] = remote_version
+    status.remote = remote_version
 
     return status
