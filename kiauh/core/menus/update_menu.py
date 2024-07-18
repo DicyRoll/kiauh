@@ -84,6 +84,7 @@ class UpdateMenu(BaseMenu):
             "klipperscreen": {"installed": False, "local": None, "remote": None},
             "crowsnest": {"installed": False, "local": None, "remote": None},
             "octoeverywhere": {"installed": False, "local": None, "remote": None},
+            "spoolman": {"installed": False, "local": None, "remote": None},
         }
 
     def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
