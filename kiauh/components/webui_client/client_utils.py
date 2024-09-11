@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
+from subprocess import PIPE, CalledProcessError, run
 from typing import List, get_args
 
 from components.klipper.klipper import Klipper
+from components.webui_client import MODULE_PATH
 from components.webui_client.base_data import (
     BaseWebClient,
     WebClientType,
@@ -21,16 +24,23 @@ from components.webui_client.base_data import (
 from components.webui_client.fluidd_data import FluiddData
 from components.webui_client.mainsail_data import MainsailData
 from core.backup_manager.backup_manager import BackupManager
+from core.constants import (
+    COLOR_CYAN,
+    COLOR_YELLOW,
+    NGINX_CONFD,
+    NGINX_SITES_AVAILABLE,
+    NGINX_SITES_ENABLED,
+    RESET_FORMAT,
+)
+from core.logger import Logger
 from core.settings.kiauh_settings import KiauhSettings
-from utils import NGINX_CONFD, NGINX_SITES_AVAILABLE
+from core.types import ComponentStatus
 from utils.common import get_install_status
-from utils.constants import COLOR_CYAN, COLOR_YELLOW, RESET_FORMAT
+from utils.fs_utils import create_symlink, remove_file
 from utils.git_utils import (
-    get_latest_tag,
+    get_latest_remote_tag,
     get_latest_unstable_tag,
 )
-from utils.logger import Logger
-from utils.types import ComponentStatus
 
 
 def get_client_status(
@@ -73,26 +83,6 @@ def get_current_client_config(clients: List[BaseWebClient]) -> str:
     return f"{COLOR_CYAN}-{RESET_FORMAT}"
 
 
-def backup_mainsail_config_json(is_temp=False) -> None:
-    c_json = MainsailData().client_dir.joinpath("config.json")
-    bm = BackupManager()
-    if is_temp:
-        fn = Path.home().joinpath("config.json.kiauh.bak")
-        bm.backup_file(c_json, custom_filename=fn)
-    else:
-        bm.backup_file(c_json)
-
-
-def restore_mainsail_config_json() -> None:
-    try:
-        c_json = MainsailData().client_dir.joinpath("config.json")
-        Logger.print_status(f"Restore '{c_json}' ...")
-        source = Path.home().joinpath("config.json.kiauh.bak")
-        shutil.copy(source, c_json)
-    except OSError:
-        Logger.print_info("Unable to restore config.json. Skipped ...")
-
-
 def enable_mainsail_remotemode() -> None:
     Logger.print_status("Enable Mainsails remote mode ...")
     c_json = MainsailData().client_dir.joinpath("config.json")
@@ -111,17 +101,19 @@ def enable_mainsail_remotemode() -> None:
     Logger.print_ok("Mainsails remote mode enabled!")
 
 
-def symlink_webui_nginx_log(klipper_instances: List[Klipper]) -> None:
+def symlink_webui_nginx_log(
+    client: BaseWebClient, klipper_instances: List[Klipper]
+) -> None:
     Logger.print_status("Link NGINX logs into log directory ...")
-    access_log = Path("/var/log/nginx/mainsail-access.log")
-    error_log = Path("/var/log/nginx/mainsail-error.log")
+    access_log = client.nginx_access_log
+    error_log = client.nginx_error_log
 
     for instance in klipper_instances:
-        desti_access = instance.log_dir.joinpath("mainsail-access.log")
+        desti_access = instance.base.log_dir.joinpath(access_log.name)
         if not desti_access.exists():
             desti_access.symlink_to(access_log)
 
-        desti_error = instance.log_dir.joinpath("mainsail-error.log")
+        desti_error = instance.base.log_dir.joinpath(error_log.name)
         if not desti_error.exists():
             desti_error.symlink_to(error_log)
 
@@ -137,7 +129,7 @@ def get_local_client_version(client: BaseWebClient) -> str | None:
 
     if relinfo_file.is_file():
         with open(relinfo_file, "r") as f:
-            return json.load(f)["version"]
+            return str(json.load(f)["version"])
     else:
         with open(version_file, "r") as f:
             return f.readlines()[0]
@@ -145,8 +137,8 @@ def get_local_client_version(client: BaseWebClient) -> str | None:
 
 def get_remote_client_version(client: BaseWebClient) -> str | None:
     try:
-        if (tag := get_latest_tag(client.repo_path)) != "":
-            return tag
+        if (tag := get_latest_remote_tag(client.repo_path)) != "":
+            return str(tag)
         return None
     except Exception:
         return None
@@ -162,9 +154,7 @@ def backup_client_data(client: BaseWebClient) -> None:
 
     bm = BackupManager()
     bm.backup_directory(f"{name}-{version}", src, dest)
-    if name == "mainsail":
-        c_json = MainsailData().client_dir.joinpath("config.json")
-        bm.backup_file(c_json, dest)
+    bm.backup_file(client.config_file, dest)
     bm.backup_file(NGINX_SITES_AVAILABLE.joinpath(name), dest)
 
 
@@ -222,3 +212,132 @@ def get_download_url(base_url: str, client: BaseWebClient) -> str:
         return f"{base_url}/download/{unstable_tag}/{client.name}.zip"
     except Exception:
         return stable_url
+
+
+#################################################
+## NGINX RELATED FUNCTIONS
+#################################################
+
+
+def copy_upstream_nginx_cfg() -> None:
+    """
+    Creates an upstream.conf in /etc/nginx/conf.d
+    :return: None
+    """
+    source = MODULE_PATH.joinpath("assets/upstreams.conf")
+    target = NGINX_CONFD.joinpath("upstreams.conf")
+    try:
+        command = ["sudo", "cp", source, target]
+        run(command, stderr=PIPE, check=True)
+    except CalledProcessError as e:
+        log = f"Unable to create upstreams.conf: {e.stderr.decode()}"
+        Logger.print_error(log)
+        raise
+
+
+def copy_common_vars_nginx_cfg() -> None:
+    """
+    Creates a common_vars.conf in /etc/nginx/conf.d
+    :return: None
+    """
+    source = MODULE_PATH.joinpath("assets/common_vars.conf")
+    target = NGINX_CONFD.joinpath("common_vars.conf")
+    try:
+        command = ["sudo", "cp", source, target]
+        run(command, stderr=PIPE, check=True)
+    except CalledProcessError as e:
+        log = f"Unable to create upstreams.conf: {e.stderr.decode()}"
+        Logger.print_error(log)
+        raise
+
+
+def generate_nginx_cfg_from_template(name: str, template_src: Path, **kwargs) -> None:
+    """
+    Creates an NGINX config from a template file and
+    replaces all placeholders passed as kwargs. A placeholder must be defined
+    in the template file as %{placeholder}%.
+    :param name: name of the config to create
+    :param template_src: the path to the template file
+    :return: None
+    """
+    tmp = Path.home().joinpath(f"{name}.tmp")
+    shutil.copy(template_src, tmp)
+    with open(tmp, "r+") as f:
+        content = f.read()
+
+        for key, value in kwargs.items():
+            content = content.replace(f"%{key}%", str(value))
+
+        f.seek(0)
+        f.write(content)
+        f.truncate()
+
+    target = NGINX_SITES_AVAILABLE.joinpath(name)
+    try:
+        command = ["sudo", "mv", tmp, target]
+        run(command, stderr=PIPE, check=True)
+    except CalledProcessError as e:
+        log = f"Unable to create '{target}': {e.stderr.decode()}"
+        Logger.print_error(log)
+        raise
+
+
+def create_nginx_cfg(
+    display_name: str,
+    cfg_name: str,
+    template_src: Path,
+    **kwargs,
+) -> None:
+    from utils.sys_utils import set_nginx_permissions
+
+    try:
+        Logger.print_status(f"Creating NGINX config for {display_name} ...")
+
+        source = NGINX_SITES_AVAILABLE.joinpath(cfg_name)
+        target = NGINX_SITES_ENABLED.joinpath(cfg_name)
+        remove_file(Path("/etc/nginx/sites-enabled/default"), True)
+        generate_nginx_cfg_from_template(cfg_name, template_src=template_src, **kwargs)
+        create_symlink(source, target, True)
+        set_nginx_permissions()
+
+        Logger.print_ok(f"NGINX config for {display_name} successfully created.")
+    except Exception:
+        Logger.print_error(f"Creating NGINX config for {display_name} failed!")
+        raise
+
+
+def read_ports_from_nginx_configs() -> List[int]:
+    """
+    Helper function to iterate over all NGINX configs and read all ports defined for listen
+    :return: A sorted list of listen ports
+    """
+    if not NGINX_SITES_ENABLED.exists():
+        return []
+
+    port_list = []
+    for config in NGINX_SITES_ENABLED.iterdir():
+        if not config.is_file():
+            continue
+
+        with open(config, "r") as cfg:
+            lines = cfg.readlines()
+
+        for line in lines:
+            line = line.replace("default_server", "")
+            line = re.sub(r"[;:\[\]]", "", line.strip())
+            if line.startswith("listen") and line.split()[-1] not in port_list:
+                port_list.append(line.split()[-1])
+
+    ports_to_ints_list = [int(port) for port in port_list]
+    return sorted(ports_to_ints_list, key=lambda x: int(x))
+
+
+def is_valid_port(port: int, ports_in_use: List[int]) -> bool:
+    return port not in ports_in_use
+
+
+def get_next_free_port(ports_in_use: List[int]) -> int:
+    valid_ports = set(range(80, 7125))
+    used_ports = set(map(int, ports_in_use))
+
+    return min(valid_ports - used_ports)

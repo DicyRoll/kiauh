@@ -12,8 +12,8 @@ from typing import List
 
 from components.klipper.klipper import Klipper
 from components.moonraker.moonraker import Moonraker
+from core.constants import COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW, RESET_FORMAT
 from core.menus.base_menu import print_back_footer
-from utils.constants import COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW, RESET_FORMAT
 
 
 def print_moonraker_overview(
@@ -37,8 +37,8 @@ def print_moonraker_overview(
         dialog += "║                                                       ║\n"
 
     instance_map = {
-        k.get_service_file_name(): (
-            k.get_service_file_name().replace("klipper", "moonraker")
+        k.service_file_path.stem: (
+            k.service_file_path.stem.replace("klipper", "moonraker")
             if k.suffix in [m.suffix for m in moonraker_instances]
             else ""
         )
@@ -48,7 +48,7 @@ def print_moonraker_overview(
     for i, k in enumerate(instance_map):
         mr_name = instance_map.get(k)
         m = f"<-> {mr_name}" if mr_name != "" else ""
-        line = f"{COLOR_CYAN}{f'{i})' if show_index else '●'} {k} {m} {RESET_FORMAT}"
+        line = f"{COLOR_CYAN}{f'{i+1})' if show_index else '●'} {k} {m} {RESET_FORMAT}"
         dialog += f"║ {line:<63}║\n"
 
     warn_l1 = f"{COLOR_YELLOW}PLEASE NOTE: {RESET_FORMAT}"

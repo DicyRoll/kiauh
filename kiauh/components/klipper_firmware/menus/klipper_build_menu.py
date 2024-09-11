@@ -6,9 +6,10 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import textwrap
-from typing import Optional, Type
+from typing import List, Set, Type
 
 from components.klipper import KLIPPER_DIR
 from components.klipper_firmware.firmware_utils import (
@@ -16,10 +17,10 @@ from components.klipper_firmware.firmware_utils import (
     run_make_clean,
     run_make_menuconfig,
 )
+from core.constants import COLOR_CYAN, COLOR_GREEN, COLOR_RED, RESET_FORMAT
+from core.logger import Logger
 from core.menus import Option
 from core.menus.base_menu import BaseMenu
-from utils.constants import COLOR_CYAN, COLOR_GREEN, COLOR_RED, RESET_FORMAT
-from utils.logger import Logger
 from utils.sys_utils import (
     check_package_install,
     install_system_packages,
@@ -30,26 +31,26 @@ from utils.sys_utils import (
 # noinspection PyUnusedLocal
 # noinspection PyMethodMayBeStatic
 class KlipperBuildFirmwareMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None):
         super().__init__()
-        self.previous_menu = previous_menu
-        self.deps = ["build-essential", "dpkg-dev", "make"]
-        self.missing_deps = check_package_install(self.deps)
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
+        self.deps: Set[str] = {"build-essential", "dpkg-dev", "make"}
+        self.missing_deps: List[str] = check_package_install(self.deps)
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         from core.menus.advanced_menu import AdvancedMenu
 
-        self.previous_menu: Type[BaseMenu] = (
+        self.previous_menu = (
             previous_menu if previous_menu is not None else AdvancedMenu
         )
 
     def set_options(self) -> None:
         if len(self.missing_deps) == 0:
             self.input_label_txt = "Press ENTER to continue"
-            self.default_option = Option(method=self.start_build_process, menu=False)
+            self.default_option = Option(method=self.start_build_process)
         else:
             self.input_label_txt = "Press ENTER to install dependencies"
-            self.default_option = Option(method=self.install_missing_deps, menu=False)
+            self.default_option = Option(method=self.install_missing_deps)
 
     def print_menu(self) -> None:
         header = " [ Build Firmware Menu ] "
@@ -80,6 +81,7 @@ class KlipperBuildFirmwareMenu(BaseMenu):
             line = f"{COLOR_RED}Dependencies are missing!{RESET_FORMAT}"
 
         menu += f"║ {line:<62} ║\n"
+        menu += "╟───────────────────────────────────────────────────────╢\n"
 
         print(menu, end="")
 
@@ -109,4 +111,5 @@ class KlipperBuildFirmwareMenu(BaseMenu):
             Logger.print_error("Building Klipper Firmware failed!")
 
         finally:
-            self.previous_menu().run()
+            if self.previous_menu is not None:
+                self.previous_menu().run()

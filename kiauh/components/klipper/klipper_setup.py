@@ -6,8 +6,10 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 from components.klipper import (
     EXIT_KLIPPER_SETUP,
@@ -17,31 +19,31 @@ from components.klipper import (
     KLIPPER_REQ_FILE,
 )
 from components.klipper.klipper import Klipper
+from components.klipper.klipper_dialogs import (
+    print_select_custom_name_dialog,
+)
 from components.klipper.klipper_utils import (
-    add_to_existing,
+    assign_custom_name,
     backup_klipper_dir,
-    check_is_single_to_multi_conversion,
     check_user_groups,
     create_example_printer_cfg,
     get_install_count,
     handle_disruptive_system_packages,
-    handle_instance_naming,
-    handle_to_multi_instance_conversion,
-    init_name_scheme,
-    update_name_scheme,
 )
 from components.moonraker.moonraker import Moonraker
 from components.webui_client.client_utils import (
     get_existing_clients,
 )
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import DialogType, Logger
 from core.settings.kiauh_settings import KiauhSettings
 from utils.common import check_install_dependencies
 from utils.git_utils import git_clone_wrapper, git_pull_wrapper
 from utils.input_utils import get_confirm
-from utils.logger import DialogType, Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     cmd_sysctl_manage,
+    cmd_sysctl_service,
     create_python_venv,
     install_python_requirements,
     parse_packages_from_file,
@@ -49,62 +51,108 @@ from utils.sys_utils import (
 
 
 def install_klipper() -> None:
-    kl_im = InstanceManager(Klipper)
+    Logger.print_status("Installing Klipper ...")
 
-    # ask to add new instances, if there are existing ones
-    if kl_im.instances and not add_to_existing():
-        Logger.print_status(EXIT_KLIPPER_SETUP)
-        return
+    klipper_list: List[Klipper] = get_instances(Klipper)
+    moonraker_list: List[Moonraker] = get_instances(Moonraker)
+    match_moonraker: bool = False
 
-    install_count = get_install_count()
-    if install_count is None:
-        Logger.print_status(EXIT_KLIPPER_SETUP)
-        return
+    # if there are more moonraker instances than klipper instances, ask the user to
+    # match the klipper instance count to the count of moonraker instances with the same suffix
+    if len(moonraker_list) > len(klipper_list):
+        is_confirmed = display_moonraker_info(moonraker_list)
+        if not is_confirmed:
+            Logger.print_status(EXIT_KLIPPER_SETUP)
+            return
+        match_moonraker = True
 
-    # create a dict of the size of the existing instances + install count
-    name_dict = {c: "" for c in range(len(kl_im.instances) + install_count)}
-    name_scheme = init_name_scheme(kl_im.instances, install_count)
-    mr_im = InstanceManager(Moonraker)
-    name_scheme = update_name_scheme(
-        name_scheme, name_dict, kl_im.instances, mr_im.instances
+    install_count, name_dict = get_install_count_and_name_dict(
+        klipper_list, moonraker_list
     )
 
-    handle_instance_naming(name_dict, name_scheme)
+    if install_count == 0:
+        Logger.print_status(EXIT_KLIPPER_SETUP)
+        return
+
+    is_multi_install = install_count > 1 or (len(name_dict) >= 1 and install_count >= 1)
+    if not name_dict and install_count == 1:
+        name_dict = {0: ""}
+    elif is_multi_install and not match_moonraker:
+        custom_names = use_custom_names_or_go_back()
+        if custom_names is None:
+            Logger.print_status(EXIT_KLIPPER_SETUP)
+            return
+
+        handle_instance_names(install_count, name_dict, custom_names)
 
     create_example_cfg = get_confirm("Create example printer.cfg?")
-
+    # run the actual installation
     try:
-        if not kl_im.instances:
-            check_install_dependencies(["git"])
-            setup_klipper_prerequesites()
-
-        count = 0
-        for name in name_dict:
-            if name_dict[name] in [n.suffix for n in kl_im.instances]:
-                continue
-
-            if check_is_single_to_multi_conversion(kl_im.instances):
-                handle_to_multi_instance_conversion(name_dict[name])
-                continue
-
-            count += 1
-            create_klipper_instance(name_dict[name], create_example_cfg)
-
-            if count == install_count:
-                break
-
-        cmd_sysctl_manage("daemon-reload")
-
+        run_klipper_setup(klipper_list, name_dict, create_example_cfg)
     except Exception as e:
         Logger.print_error(e)
         Logger.print_error("Klipper installation failed!")
         return
+
+
+def run_klipper_setup(
+    klipper_list: List[Klipper], name_dict: Dict[int, str], create_example_cfg: bool
+) -> None:
+    if not klipper_list:
+        setup_klipper_prerequesites()
+
+    for i in name_dict:
+        # skip this iteration if there is already an instance with the name
+        if name_dict[i] in [n.suffix for n in klipper_list]:
+            continue
+
+        instance = Klipper(suffix=name_dict[i])
+        instance.create()
+        cmd_sysctl_service(instance.service_file_path.name, "enable")
+
+        if create_example_cfg:
+            # if a client-config is installed, include it in the new example cfg
+            clients = get_existing_clients()
+            create_example_printer_cfg(instance, clients)
+
+        cmd_sysctl_service(instance.service_file_path.name, "start")
+
+    cmd_sysctl_manage("daemon-reload")
 
     # step 4: check/handle conflicting packages/services
     handle_disruptive_system_packages()
 
     # step 5: check for required group membership
     check_user_groups()
+
+
+def handle_instance_names(
+    install_count: int, name_dict: Dict[int, str], custom_names: bool
+) -> None:
+    for i in range(install_count):  # 3
+        key: int = len(name_dict.keys()) + 1
+        if custom_names:
+            assign_custom_name(key, name_dict)
+        else:
+            name_dict[key] = str(len(name_dict) + 1)
+
+
+def get_install_count_and_name_dict(
+    klipper_list: List[Klipper], moonraker_list: List[Moonraker]
+) -> Tuple[int, Dict[int, str]]:
+    install_count: int | None
+    if len(moonraker_list) > len(klipper_list):
+        install_count = len(moonraker_list)
+        name_dict = {i: moonraker.suffix for i, moonraker in enumerate(moonraker_list)}
+    else:
+        install_count = get_install_count()
+        name_dict = {i: klipper.suffix for i, klipper in enumerate(klipper_list)}
+
+        if install_count is None:
+            Logger.print_status(EXIT_KLIPPER_SETUP)
+            return 0, {}
+
+    return install_count, name_dict
 
 
 def setup_klipper_prerequesites() -> None:
@@ -117,8 +165,8 @@ def setup_klipper_prerequesites() -> None:
     # install klipper dependencies and create python virtualenv
     try:
         install_klipper_packages()
-        create_python_venv(KLIPPER_ENV_DIR)
-        install_python_requirements(KLIPPER_ENV_DIR, KLIPPER_REQ_FILE)
+        if create_python_venv(KLIPPER_ENV_DIR):
+            install_python_requirements(KLIPPER_ENV_DIR, KLIPPER_REQ_FILE)
     except Exception:
         Logger.print_error("Error during installation of Klipper requirements!")
         raise
@@ -127,13 +175,12 @@ def setup_klipper_prerequesites() -> None:
 def install_klipper_packages() -> None:
     script = KLIPPER_INSTALL_SCRIPT
     packages = parse_packages_from_file(script)
-    packages.append("python3-venv")  # todo: remove once switched to virtualenv
 
     # Add dbus requirement for DietPi distro
     if Path("/boot/dietpi/.version").exists():
         packages.append("dbus")
 
-    check_install_dependencies(packages)
+    check_install_dependencies({*packages})
 
 
 def update_klipper() -> None:
@@ -153,8 +200,8 @@ def update_klipper() -> None:
     if settings.kiauh.backup_before_update:
         backup_klipper_dir()
 
-    instance_manager = InstanceManager(Klipper)
-    instance_manager.stop_all_instance()
+    instances = get_instances(Klipper)
+    InstanceManager.stop_all(instances)
 
     git_pull_wrapper(repo=settings.klipper.repo_url, target_dir=KLIPPER_DIR)
 
@@ -163,17 +210,30 @@ def update_klipper() -> None:
     # install possible new python dependencies
     install_python_requirements(KLIPPER_ENV_DIR, KLIPPER_REQ_FILE)
 
-    instance_manager.start_all_instance()
+    InstanceManager.start_all(instances)
 
 
-def create_klipper_instance(name: str, create_example_cfg: bool) -> None:
-    kl_im = InstanceManager(Klipper)
-    new_instance = Klipper(suffix=name)
-    kl_im.current_instance = new_instance
-    kl_im.create_instance()
-    kl_im.enable_instance()
-    if create_example_cfg:
-        # if a client-config is installed, include it in the new example cfg
-        clients = get_existing_clients()
-        create_example_printer_cfg(new_instance, clients)
-    kl_im.start_instance()
+def use_custom_names_or_go_back() -> bool | None:
+    print_select_custom_name_dialog()
+    _input: bool | None = get_confirm(
+        "Assign custom names?",
+        False,
+        allow_go_back=True,
+    )
+    return _input
+
+
+def display_moonraker_info(moonraker_list: List[Moonraker]) -> bool:
+    # todo: only show the klipper instances that are not already installed
+    Logger.print_dialog(
+        DialogType.INFO,
+        [
+            "Existing Moonraker instances detected:",
+            *[f"● {m.service_file_path.stem}" for m in moonraker_list],
+            "\n\n",
+            "The following Klipper instances will be installed:",
+            *[f"● klipper-{m.suffix}" for m in moonraker_list],
+        ],
+    )
+    _input: bool = get_confirm("Proceed with installation?")
+    return _input

@@ -6,27 +6,42 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Type
+from typing import Dict, List, Literal, Optional, Set
 
 from components.klipper.klipper import Klipper
-from core.instance_manager.base_instance import BaseInstance
-from core.instance_manager.instance_manager import InstanceManager
-from utils import PRINTER_CFG_BACKUP_DIR
-from utils.constants import (
+from core.constants import (
     COLOR_CYAN,
+    GLOBAL_DEPS,
+    PRINTER_CFG_BACKUP_DIR,
     RESET_FORMAT,
 )
-from utils.git_utils import get_local_commit, get_remote_commit, get_repo_name
-from utils.logger import DialogType, Logger
+from core.logger import DialogType, Logger
+from core.types import ComponentStatus, StatusCode
+from utils.git_utils import (
+    get_local_commit,
+    get_local_tags,
+    get_remote_commit,
+    get_repo_name,
+)
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     check_package_install,
     install_system_packages,
     update_system_package_lists,
 )
-from utils.types import ComponentStatus, StatusCode
+
+
+def get_kiauh_version() -> str:
+    """
+    Helper method to get the current KIAUH version by reading the latest tag
+    :return: string of the latest tag
+    """
+    return get_local_tags(Path(__file__).parent.parent)[-1]
 
 
 def convert_camelcase_to_kebabcase(name: str) -> str:
@@ -45,19 +60,28 @@ def get_current_date() -> Dict[Literal["date", "time"], str]:
     return {"date": date, "time": time}
 
 
-def check_install_dependencies(deps: List[str]) -> None:
+def check_install_dependencies(
+    deps: Set[str] | None = None, include_global: bool = True
+) -> None:
     """
     Common helper method to check if dependencies are installed
     and if not, install them automatically |
+    :param include_global: Wether to include the global dependencies or not
     :param deps: List of strings of package names to check if installed
     :return: None
     """
+    if deps is None:
+        deps = set()
+
+    if include_global:
+        deps.update(GLOBAL_DEPS)
+
     requirements = check_package_install(deps)
     if requirements:
         Logger.print_status("Installing dependencies ...")
         Logger.print_info("The following packages need installation:")
-        for _ in requirements:
-            print(f"{COLOR_CYAN}● {_}{RESET_FORMAT}")
+        for r in requirements:
+            print(f"{COLOR_CYAN}● {r}{RESET_FORMAT}")
         update_system_package_lists(silent=False)
         install_system_packages(requirements)
 
@@ -65,7 +89,7 @@ def check_install_dependencies(deps: List[str]) -> None:
 def get_install_status(
     repo_dir: Path,
     env_dir: Optional[Path] = None,
-    instance_type: Optional[Type[BaseInstance]] = None,
+    instance_type: type | None = None,
     files: Optional[List[Path]] = None,
 ) -> ComponentStatus:
     """
@@ -76,50 +100,53 @@ def get_install_status(
     :param files: List of optional files to check for existence
     :return: Dictionary with status string, statuscode and instance count
     """
+    from utils.instance_utils import get_instances
+
     checks = [repo_dir.exists()]
 
     if env_dir is not None:
         checks.append(env_dir.exists())
 
-    im = InstanceManager(instance_type)
     instances = 0
     if instance_type is not None:
-        instances = len(im.instances)
+        instances = len(get_instances(instance_type))
         checks.append(instances > 0)
 
     if files is not None:
         for f in files:
             checks.append(f.exists())
 
+    status: StatusCode
     if all(checks):
-        status: StatusCode = 2  # installed
+        status = 2  # installed
     elif not any(checks):
-        status: StatusCode = 0  # not installed
+        status = 0  # not installed
     else:
-        status: StatusCode = 1  # incomplete
+        status = 1  # incomplete
 
+    org, repo = get_repo_name(repo_dir)
     return ComponentStatus(
         status=status,
         instances=instances,
-        repo=get_repo_name(repo_dir),
+        owner=org,
+        repo=repo,
         local=get_local_commit(repo_dir),
         remote=get_remote_commit(repo_dir),
     )
 
 
-def backup_printer_config_dir():
+def backup_printer_config_dir() -> None:
     # local import to prevent circular import
     from core.backup_manager.backup_manager import BackupManager
 
-    im = InstanceManager(Klipper)
-    instances: List[Klipper] = im.instances
+    instances: List[Klipper] = get_instances(Klipper)
     bm = BackupManager()
 
     for instance in instances:
-        name = f"config-{instance.data_dir_name}"
+        name = f"config-{instance.data_dir.name}"
         bm.backup_directory(
             name,
-            source=instance.cfg_dir,
+            source=instance.base.cfg_dir,
             target=PRINTER_CFG_BACKUP_DIR,
         )
 
@@ -132,8 +159,7 @@ def moonraker_exists(name: str = "") -> bool:
     """
     from components.moonraker.moonraker import Moonraker
 
-    mr_im = InstanceManager(Moonraker)
-    mr_instances: List[Moonraker] = mr_im.instances
+    mr_instances: List[Moonraker] = get_instances(Moonraker)
 
     info = (
         f"{name} requires Moonraker to be installed"

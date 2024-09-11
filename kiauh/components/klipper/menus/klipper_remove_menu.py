@@ -6,41 +6,40 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import textwrap
-from typing import Optional, Type
+from typing import Type
 
 from components.klipper import klipper_remove
+from core.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 from core.menus import FooterType, Option
 from core.menus.base_menu import BaseMenu
-from utils.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 
 
 # noinspection PyUnusedLocal
 class KlipperRemoveMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None):
         super().__init__()
-        self.previous_menu = previous_menu
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
         self.footer_type = FooterType.BACK
         self.remove_klipper_service = False
         self.remove_klipper_dir = False
         self.remove_klipper_env = False
         self.selection_state = False
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         from core.menus.remove_menu import RemoveMenu
 
-        self.previous_menu: Type[BaseMenu] = (
-            previous_menu if previous_menu is not None else RemoveMenu
-        )
+        self.previous_menu = previous_menu if previous_menu is not None else RemoveMenu
 
     def set_options(self) -> None:
         self.options = {
-            "a": Option(method=self.toggle_all, menu=False),
-            "1": Option(method=self.toggle_remove_klipper_service, menu=False),
-            "2": Option(method=self.toggle_remove_klipper_dir, menu=False),
-            "3": Option(method=self.toggle_remove_klipper_env, menu=False),
-            "c": Option(method=self.run_removal_process, menu=False),
+            "a": Option(method=self.toggle_all),
+            "1": Option(method=self.toggle_remove_klipper_service),
+            "2": Option(method=self.toggle_remove_klipper_dir),
+            "3": Option(method=self.toggle_remove_klipper_env),
+            "c": Option(method=self.run_removal_process),
         }
 
     def print_menu(self) -> None:
@@ -73,10 +72,10 @@ class KlipperRemoveMenu(BaseMenu):
         print(menu, end="")
 
     def toggle_all(self, **kwargs) -> None:
-        self.remove_klipper_service = not self.remove_klipper_service
-        self.remove_klipper_dir = not self.remove_klipper_dir
-        self.remove_klipper_env = not self.remove_klipper_env
         self.selection_state = not self.selection_state
+        self.remove_klipper_service = self.selection_state
+        self.remove_klipper_dir = self.selection_state
+        self.remove_klipper_env = self.selection_state
 
     def toggle_remove_klipper_service(self, **kwargs) -> None:
         self.remove_klipper_service = not self.remove_klipper_service

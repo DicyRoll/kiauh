@@ -15,33 +15,40 @@ from components.klipper.klipper import Klipper
 from components.klipperscreen import (
     KLIPPERSCREEN_BACKUP_DIR,
     KLIPPERSCREEN_DIR,
-    KLIPPERSCREEN_ENV,
+    KLIPPERSCREEN_ENV_DIR,
+    KLIPPERSCREEN_INSTALL_SCRIPT,
+    KLIPPERSCREEN_LOG_NAME,
     KLIPPERSCREEN_REPO,
+    KLIPPERSCREEN_REQ_FILE,
+    KLIPPERSCREEN_SERVICE_FILE,
+    KLIPPERSCREEN_SERVICE_NAME,
+    KLIPPERSCREEN_UPDATER_SECTION_NAME,
 )
 from components.moonraker.moonraker import Moonraker
 from core.backup_manager.backup_manager import BackupManager
+from core.constants import SYSTEMD
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import DialogType, Logger
 from core.settings.kiauh_settings import KiauhSettings
+from core.types import ComponentStatus
 from utils.common import (
     check_install_dependencies,
     get_install_status,
 )
 from utils.config_utils import add_config_section, remove_config_section
-from utils.constants import SYSTEMD
 from utils.fs_utils import remove_with_sudo
 from utils.git_utils import (
     git_clone_wrapper,
     git_pull_wrapper,
 )
 from utils.input_utils import get_confirm
-from utils.logger import DialogType, Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     check_python_version,
-    cmd_sysctl_manage,
     cmd_sysctl_service,
     install_python_requirements,
+    remove_system_service,
 )
-from utils.types import ComponentStatus
 
 
 def install_klipperscreen() -> None:
@@ -50,8 +57,7 @@ def install_klipperscreen() -> None:
     if not check_python_version(3, 7):
         return
 
-    mr_im = InstanceManager(Moonraker)
-    mr_instances = mr_im.instances
+    mr_instances = get_instances(Moonraker)
     if not mr_instances:
         Logger.print_dialog(
             DialogType.WARNING,
@@ -62,8 +68,6 @@ def install_klipperscreen() -> None:
                 "KlipperScreens update manager configuration for Moonraker "
                 "will not be added to any moonraker.conf.",
             ],
-            padding_top=0,
-            padding_bottom=0,
         )
         if not get_confirm(
             "Continue KlipperScreen installation?",
@@ -72,17 +76,15 @@ def install_klipperscreen() -> None:
         ):
             return
 
-    package_list = ["git", "wget", "curl", "unzip", "dfu-util"]
-    check_install_dependencies(package_list)
+    check_install_dependencies()
 
     git_clone_wrapper(KLIPPERSCREEN_REPO, KLIPPERSCREEN_DIR)
 
     try:
-        script = f"{KLIPPERSCREEN_DIR}/scripts/KlipperScreen-install.sh"
-        run(script, shell=True, check=True)
+        run(KLIPPERSCREEN_INSTALL_SCRIPT.as_posix(), shell=True, check=True)
         if mr_instances:
             patch_klipperscreen_update_manager(mr_instances)
-            mr_im.restart_all_instance()
+            InstanceManager.restart_all(mr_instances)
         else:
             Logger.print_info(
                 "Moonraker is not installed! Cannot add "
@@ -95,34 +97,30 @@ def install_klipperscreen() -> None:
 
 
 def patch_klipperscreen_update_manager(instances: List[Moonraker]) -> None:
-    env_py = f"{KLIPPERSCREEN_ENV}/bin/python"
     add_config_section(
-        section="update_manager KlipperScreen",
+        section=KLIPPERSCREEN_UPDATER_SECTION_NAME,
         instances=instances,
         options=[
             ("type", "git_repo"),
-            ("path", str(KLIPPERSCREEN_DIR)),
-            ("orgin", KLIPPERSCREEN_REPO),
-            ("env", env_py),
-            ("requirements", "scripts/KlipperScreen-requirements.txt"),
-            ("install_script", "scripts/KlipperScreen-install.sh"),
+            ("path", KLIPPERSCREEN_DIR.as_posix()),
+            ("origin", KLIPPERSCREEN_REPO),
+            ("managed_services", "KlipperScreen"),
+            ("env", f"{KLIPPERSCREEN_ENV_DIR}/bin/python"),
+            ("requirements", KLIPPERSCREEN_REQ_FILE.as_posix()),
+            ("install_script", KLIPPERSCREEN_INSTALL_SCRIPT.as_posix()),
         ],
     )
 
 
 def update_klipperscreen() -> None:
+    if not KLIPPERSCREEN_DIR.exists():
+        Logger.print_info("KlipperScreen does not seem to be installed! Skipping ...")
+        return
+
     try:
-        cmd_sysctl_service("KlipperScreen", "stop")
-
-        if not KLIPPERSCREEN_DIR.exists():
-            Logger.print_info(
-                "KlipperScreen does not seem to be installed! Skipping ..."
-            )
-            return
-
         Logger.print_status("Updating KlipperScreen ...")
 
-        cmd_sysctl_service("KlipperScreen", "stop")
+        cmd_sysctl_service(KLIPPERSCREEN_SERVICE_NAME, "stop")
 
         settings = KiauhSettings()
         if settings.kiauh.backup_before_update:
@@ -130,12 +128,9 @@ def update_klipperscreen() -> None:
 
         git_pull_wrapper(KLIPPERSCREEN_REPO, KLIPPERSCREEN_DIR)
 
-        requirements = KLIPPERSCREEN_DIR.joinpath(
-            "/scripts/KlipperScreen-requirements.txt"
-        )
-        install_python_requirements(KLIPPERSCREEN_ENV, requirements)
+        install_python_requirements(KLIPPERSCREEN_ENV_DIR, KLIPPERSCREEN_REQ_FILE)
 
-        cmd_sysctl_service("KlipperScreen", "start")
+        cmd_sysctl_service(KLIPPERSCREEN_SERVICE_NAME, "start")
 
         Logger.print_ok("KlipperScreen updated successfully.", end="\n\n")
     except CalledProcessError as e:
@@ -146,8 +141,8 @@ def update_klipperscreen() -> None:
 def get_klipperscreen_status() -> ComponentStatus:
     return get_install_status(
         KLIPPERSCREEN_DIR,
-        KLIPPERSCREEN_ENV,
-        files=[SYSTEMD.joinpath("KlipperScreen.service")],
+        KLIPPERSCREEN_ENV_DIR,
+        files=[SYSTEMD.joinpath(KLIPPERSCREEN_SERVICE_NAME)],
     )
 
 
@@ -161,40 +156,31 @@ def remove_klipperscreen() -> None:
         else:
             Logger.print_warn("KlipperScreen directory not found!")
 
-        if KLIPPERSCREEN_ENV.exists():
+        if KLIPPERSCREEN_ENV_DIR.exists():
             Logger.print_status("Removing KlipperScreen environment ...")
-            shutil.rmtree(KLIPPERSCREEN_ENV)
+            shutil.rmtree(KLIPPERSCREEN_ENV_DIR)
             Logger.print_ok("KlipperScreen environment successfully removed!")
         else:
             Logger.print_warn("KlipperScreen environment not found!")
 
-        service = SYSTEMD.joinpath("KlipperScreen.service")
-        if service.exists():
-            Logger.print_status("Removing KlipperScreen service ...")
-            cmd_sysctl_service(service, "stop")
-            cmd_sysctl_service(service, "disable")
-            remove_with_sudo(service)
-            cmd_sysctl_manage("daemon-reload")
-            cmd_sysctl_manage("reset-failed")
-            Logger.print_ok("KlipperScreen service successfully removed!")
+        if KLIPPERSCREEN_SERVICE_FILE.exists():
+            remove_system_service(KLIPPERSCREEN_SERVICE_NAME)
 
-        logfile = Path("/tmp/KlipperScreen.log")
+        logfile = Path(f"/tmp/{KLIPPERSCREEN_LOG_NAME}")
         if logfile.exists():
             Logger.print_status("Removing KlipperScreen log file ...")
             remove_with_sudo(logfile)
             Logger.print_ok("KlipperScreen log file successfully removed!")
 
-        kl_im = InstanceManager(Klipper)
-        kl_instances: List[Klipper] = kl_im.instances
+        kl_instances: List[Klipper] = get_instances(Klipper)
         for instance in kl_instances:
-            logfile = instance.log_dir.joinpath("KlipperScreen.log")
+            logfile = instance.base.log_dir.joinpath(KLIPPERSCREEN_LOG_NAME)
             if logfile.exists():
                 Logger.print_status(f"Removing {logfile} ...")
                 Path(logfile).unlink()
                 Logger.print_ok(f"{logfile} successfully removed!")
 
-        mr_im = InstanceManager(Moonraker)
-        mr_instances: List[Moonraker] = mr_im.instances
+        mr_instances: List[Moonraker] = get_instances(Moonraker)
         if mr_instances:
             Logger.print_status("Removing KlipperScreen from update manager ...")
             remove_config_section("update_manager KlipperScreen", mr_instances)
@@ -209,12 +195,12 @@ def remove_klipperscreen() -> None:
 def backup_klipperscreen_dir() -> None:
     bm = BackupManager()
     bm.backup_directory(
-        "KlipperScreen",
+        KLIPPERSCREEN_DIR.name,
         source=KLIPPERSCREEN_DIR,
         target=KLIPPERSCREEN_BACKUP_DIR,
     )
     bm.backup_directory(
-        "KlipperScreen-env",
-        source=KLIPPERSCREEN_ENV,
+        KLIPPERSCREEN_ENV_DIR.name,
+        source=KLIPPERSCREEN_ENV_DIR,
         target=KLIPPERSCREEN_BACKUP_DIR,
     )

@@ -6,31 +6,33 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import textwrap
-from typing import Optional, Type
+from typing import Type
 
 from components.klipper_firmware.flash_options import FlashMethod, FlashOptions
+from core.constants import COLOR_RED, RESET_FORMAT
 from core.menus import FooterType, Option
 from core.menus.base_menu import BaseMenu
-from utils.constants import COLOR_RED, RESET_FORMAT
 
 
 # noinspection PyUnusedLocal
 # noinspection PyMethodMayBeStatic
 class KlipperNoFirmwareErrorMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None):
         super().__init__()
-        self.previous_menu = previous_menu
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
 
         self.flash_options = FlashOptions()
         self.footer_type = FooterType.BLANK
         self.input_label_txt = "Press ENTER to go back to [Advanced Menu]"
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         self.previous_menu = previous_menu
 
     def set_options(self) -> None:
-        self.default_option = Option(self.go_back, False)
+        self.default_option = Option(method=self.go_back)
 
     def print_menu(self) -> None:
         header = "!!! NO FIRMWARE FILE FOUND !!!"
@@ -67,17 +69,17 @@ class KlipperNoFirmwareErrorMenu(BaseMenu):
 # noinspection PyUnusedLocal
 # noinspection PyMethodMayBeStatic
 class KlipperNoBoardTypesErrorMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None):
         super().__init__()
-        self.previous_menu = previous_menu
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
         self.footer_type = FooterType.BLANK
         self.input_label_txt = "Press ENTER to go back to [Main Menu]"
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         self.previous_menu = previous_menu
 
     def set_options(self) -> None:
-        self.default_option = Option(self.go_back, False)
+        self.default_option = Option(method=self.go_back)
 
     def print_menu(self) -> None:
         header = "!!! ERROR GETTING BOARD LIST !!!"

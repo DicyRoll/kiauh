@@ -7,16 +7,21 @@ from http.client import HTTPResponse
 from json import JSONDecodeError
 from pathlib import Path
 from subprocess import DEVNULL, PIPE, CalledProcessError, check_output, run
-from typing import List, Optional, Type
+from typing import List, Type
 
-from core.instance_manager.base_instance import BaseInstance
 from core.instance_manager.instance_manager import InstanceManager
+from core.instance_type import InstanceType
+from core.logger import Logger
 from utils.input_utils import get_confirm, get_number_input
-from utils.logger import Logger
+from utils.instance_utils import get_instances
+
+
+class GitException(Exception):
+    pass
 
 
 def git_clone_wrapper(
-    repo: str, target_dir: Path, branch: Optional[str] = None, force: bool = False
+    repo: str, target_dir: Path, branch: str | None = None, force: bool = False
 ) -> None:
     """
     Clones a repository from the given URL and checks out the specified branch if given.
@@ -42,10 +47,10 @@ def git_clone_wrapper(
     except CalledProcessError:
         log = "An unexpected error occured during cloning of the repository."
         Logger.print_error(log)
-        return
+        raise GitException(log)
     except OSError as e:
         Logger.print_error(f"Error removing existing repository: {e.strerror}")
-        return
+        raise GitException(f"Error removing existing repository: {e.strerror}")
 
 
 def git_pull_wrapper(repo: str, target_dir: Path) -> None:
@@ -65,24 +70,58 @@ def git_pull_wrapper(repo: str, target_dir: Path) -> None:
         return
 
 
-def get_repo_name(repo: Path) -> str | None:
+def get_repo_name(repo: Path) -> tuple[str, str] | None:
     """
     Helper method to extract the organisation and name of a repository |
     :param repo: repository to extract the values from
     :return: String in form of "<orga>/<name>" or None
     """
     if not repo.exists() or not repo.joinpath(".git").exists():
-        return "-"
+        return "-", "-"
 
     try:
-        cmd = ["git", "-C", repo, "config", "--get", "remote.origin.url"]
-        result = check_output(cmd, stderr=DEVNULL)
-        return "/".join(result.decode().strip().split("/")[-2:])
+        cmd = ["git", "-C", repo.as_posix(), "config", "--get", "remote.origin.url"]
+        result: str = check_output(cmd, stderr=DEVNULL).decode(encoding="utf-8")
+        substrings: List[str] = result.strip().split("/")[-2:]
+        return substrings[0], substrings[1]
+
+        # return "/".join(substrings).replace(".git", "")
     except CalledProcessError:
         return None
 
 
-def get_tags(repo_path: str) -> List[str]:
+def get_local_tags(repo_path: Path, _filter: str | None = None) -> List[str]:
+    """
+    Get all tags of a local Git repository
+    :param repo_path: Path to the local Git repository
+    :param _filter: Optional filter to filter the tags by
+    :return: List of tags
+    """
+    try:
+        cmd = ["git", "tag", "-l"]
+
+        if _filter is not None:
+            cmd.append(f"'${_filter}'")
+
+        result: str = check_output(
+            cmd,
+            stderr=DEVNULL,
+            cwd=repo_path.as_posix(),
+        ).decode(encoding="utf-8")
+
+        tags = result.split("\n")
+        return tags[:-1]
+
+    except CalledProcessError:
+        return []
+
+
+def get_remote_tags(repo_path: str) -> List[str]:
+    """
+    Gets the tags of a GitHub repostiory
+    :param repo_path: path of the GitHub repository - e.g. `<owner>/<name>`
+    :return: List of tags
+    """
     try:
         url = f"https://api.github.com/repos/{repo_path}/tags"
         with urllib.request.urlopen(url) as r:
@@ -100,14 +139,14 @@ def get_tags(repo_path: str) -> List[str]:
         raise
 
 
-def get_latest_tag(repo_path: str) -> str:
+def get_latest_remote_tag(repo_path: str) -> str:
     """
     Gets the latest stable tag of a GitHub repostiory
     :param repo_path: path of the GitHub repository - e.g. `<owner>/<name>`
     :return: tag or empty string
     """
     try:
-        if len(latest_tag := get_tags(repo_path)) > 0:
+        if len(latest_tag := get_remote_tags(repo_path)) > 0:
             return latest_tag[0]
         else:
             return ""
@@ -122,13 +161,44 @@ def get_latest_unstable_tag(repo_path: str) -> str:
     :return: tag or empty string
     """
     try:
-        if len(unstable_tags := [t for t in get_tags(repo_path) if "-" in t]) > 0:
+        if (
+            len(unstable_tags := [t for t in get_remote_tags(repo_path) if "-" in t])
+            > 0
+        ):
             return unstable_tags[0]
         else:
             return ""
     except Exception:
         Logger.print_error("Error while getting the latest unstable tag")
         raise
+
+
+def compare_semver_tags(tag1: str, tag2: str) -> bool:
+    """
+    Compare two semver version strings.
+    Does not support comparing pre-release versions (e.g. 1.0.0-rc.1, 1.0.0-beta.1)
+    :param tag1: First version string
+    :param tag2: Second version string
+    :return: True if tag1 is greater than tag2, False otherwise
+    """
+    if tag1 == tag2:
+        return False
+
+    def parse_version(v):
+        return list(map(int, v[1:].split(".")))
+
+    tag1_parts = parse_version(tag1)
+    tag2_parts = parse_version(tag2)
+
+    max_len = max(len(tag1_parts), len(tag2_parts))
+    tag1_parts += [0] * (max_len - len(tag1_parts))
+    tag2_parts += [0] * (max_len - len(tag2_parts))
+
+    for part1, part2 in zip(tag1_parts, tag2_parts):
+        if part1 != part2:
+            return part1 > part2
+
+    return False
 
 
 def get_local_commit(repo: Path) -> str | None:
@@ -159,17 +229,18 @@ def get_remote_commit(repo: Path) -> str | None:
 
 def git_cmd_clone(repo: str, target_dir: Path) -> None:
     try:
-        command = ["git", "clone", repo, target_dir]
+        command = ["git", "clone", repo, target_dir.as_posix()]
         run(command, check=True)
 
         Logger.print_ok("Clone successful!")
     except CalledProcessError as e:
-        log = f"Error cloning repository {repo}: {e.stderr.decode()}"
+        error = e.stderr.decode() if e.stderr else "Unknown error"
+        log = f"Error cloning repository {repo}: {error}"
         Logger.print_error(log)
         raise
 
 
-def git_cmd_checkout(branch: str, target_dir: Path) -> None:
+def git_cmd_checkout(branch: str | None, target_dir: Path) -> None:
     if branch is None:
         return
 
@@ -194,15 +265,15 @@ def git_cmd_pull(target_dir: Path) -> None:
         raise
 
 
-def rollback_repository(repo_dir: Path, instance: Type[BaseInstance]) -> None:
+def rollback_repository(repo_dir: Path, instance: Type[InstanceType]) -> None:
     q1 = "How many commits do you want to roll back"
     amount = get_number_input(q1, 1, allow_go_back=True)
 
-    im = InstanceManager(instance)
+    instances = get_instances(instance)
 
     Logger.print_warn("Do not continue if you have ongoing prints!", start="\n")
     Logger.print_warn(
-        f"All currently running {im.instance_type.__name__} services will be stopped!"
+        f"All currently running {instance.__name__} services will be stopped!"
     )
     if not get_confirm(
         f"Roll back {amount} commit{'s' if amount > 1 else ''}",
@@ -212,7 +283,7 @@ def rollback_repository(repo_dir: Path, instance: Type[BaseInstance]) -> None:
         Logger.print_info("Aborting roll back ...")
         return
 
-    im.stop_all_instance()
+    InstanceManager.stop_all(instances)
 
     try:
         cmd = ["git", "reset", "--hard", f"HEAD~{amount}"]
@@ -221,4 +292,4 @@ def rollback_repository(repo_dir: Path, instance: Type[BaseInstance]) -> None:
     except CalledProcessError as e:
         Logger.print_error(f"An error occured during repo rollback:\n{e}")
 
-    im.start_all_instance()
+    InstanceManager.start_all(instances)

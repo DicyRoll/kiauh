@@ -6,8 +6,10 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import textwrap
-from typing import Optional, Type
+from typing import Callable, List, Type
 
 from components.crowsnest.crowsnest import get_crowsnest_status, update_crowsnest
 from components.klipper.klipper_setup import update_klipper
@@ -28,7 +30,6 @@ from components.octoeverywhere.octoeverywhere_setup import (
     get_octoeverywhere_status,
     update_octoeverywhere,
 )
-from components.spoolman.spoolman import get_spoolman_status, update_spoolman
 from components.webui_client.client_config.client_config_setup import (
     update_client_config,
 )
@@ -39,25 +40,34 @@ from components.webui_client.client_utils import (
 )
 from components.webui_client.fluidd_data import FluiddData
 from components.webui_client.mainsail_data import MainsailData
-from core.menus import Option
-from core.menus.base_menu import BaseMenu
-from utils.constants import (
+from core.constants import (
     COLOR_GREEN,
     COLOR_RED,
     COLOR_YELLOW,
     RESET_FORMAT,
 )
-from utils.logger import Logger
-from utils.spinner import Spinner
-from utils.types import ComponentStatus
+from core.logger import DialogType, Logger
+from core.menus import Option
+from core.menus.base_menu import BaseMenu
+from core.spinner import Spinner
+from core.types import ComponentStatus
+from utils.input_utils import get_confirm
+from utils.sys_utils import (
+    get_upgradable_packages,
+    update_system_package_lists,
+    upgrade_system_packages,
+)
 
 
 # noinspection PyUnusedLocal
 # noinspection PyMethodMayBeStatic
 class UpdateMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None) -> None:
         super().__init__()
-        self.previous_menu = previous_menu
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
+
+        self.packages: List[str] = []
+        self.package_count: int = 0
 
         self.klipper_local = self.klipper_remote = ""
         self.moonraker_local = self.moonraker_remote = ""
@@ -69,7 +79,6 @@ class UpdateMenu(BaseMenu):
         self.mobileraker_local = self.mobileraker_remote = ""
         self.crowsnest_local = self.crowsnest_remote = ""
         self.octoeverywhere_local = self.octoeverywhere_remote = ""
-        self.spoolman_local = self.spoolman_remote = ""
 
         self.mainsail_data = MainsailData()
         self.fluidd_data = FluiddData()
@@ -84,35 +93,31 @@ class UpdateMenu(BaseMenu):
             "klipperscreen": {"installed": False, "local": None, "remote": None},
             "crowsnest": {"installed": False, "local": None, "remote": None},
             "octoeverywhere": {"installed": False, "local": None, "remote": None},
-            "spoolman": {"installed": False, "local": None, "remote": None},
         }
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         from core.menus.main_menu import MainMenu
 
-        self.previous_menu: Type[BaseMenu] = (
-            previous_menu if previous_menu is not None else MainMenu
-        )
+        self.previous_menu = previous_menu if previous_menu is not None else MainMenu
 
     def set_options(self) -> None:
         self.options = {
-            "a": Option(self.update_all, menu=False),
-            "1": Option(self.update_klipper, menu=False),
-            "2": Option(self.update_moonraker, menu=False),
-            "3": Option(self.update_mainsail, menu=False),
-            "4": Option(self.update_fluidd, menu=False),
-            "5": Option(self.update_mainsail_config, menu=False),
-            "6": Option(self.update_fluidd_config, menu=False),
-            "7": Option(self.update_spoolman, menu=False),
-            "8": Option(self.update_klipperscreen, menu=False),
-            "9": Option(self.update_mobileraker, menu=False),
-            "10": Option(self.update_crowsnest, menu=False),
-            "11": Option(self.update_octoeverywhere, menu=False),
-            "12": Option(self.upgrade_system_packages, menu=False),
+            "a": Option(self.update_all),
+            "1": Option(self.update_klipper),
+            "2": Option(self.update_moonraker),
+            "3": Option(self.update_mainsail),
+            "4": Option(self.update_fluidd),
+            "5": Option(self.update_mainsail_config),
+            "6": Option(self.update_fluidd_config),
+            "7": Option(self.update_klipperscreen),
+            "8": Option(self.update_mobileraker),
+            "9": Option(self.update_crowsnest),
+            "10": Option(self.update_octoeverywhere),
+            "11": Option(self.upgrade_system_packages),
         }
 
-    def print_menu(self):
-        spinner = Spinner()
+    def print_menu(self) -> None:
+        spinner = Spinner("Loading update menu, please wait", color="green")
         spinner.start()
 
         self._fetch_update_status()
@@ -122,6 +127,15 @@ class UpdateMenu(BaseMenu):
         header = " [ Update Menu ] "
         color = COLOR_GREEN
         count = 62 - len(color) - len(RESET_FORMAT)
+
+        sysupgrades: str = "No upgrades available."
+        padding = 29
+        if self.package_count > 0:
+            sysupgrades = (
+                f"{COLOR_GREEN}{self.package_count} upgrades available!{RESET_FORMAT}"
+            )
+            padding = 38
+
         menu = textwrap.dedent(
             f"""
             ╔═══════════════════════════════════════════════════════╗
@@ -141,70 +155,65 @@ class UpdateMenu(BaseMenu):
             ║  5) Mainsail-Config   │ {self.mainsail_config_local:<22} │ {self.mainsail_config_remote:<22} ║
             ║  6) Fluidd-Config     │ {self.fluidd_config_local:<22} │ {self.fluidd_config_remote:<22} ║
             ║                       │               │               ║
-            ║ Spool Manager:        ├───────────────┼───────────────║
-            ║  7) Spoolman          │ {self.spoolman_local:<22} │ {self.spoolman_remote:<22} ║
-            ║                       │               │               ║
             ║ Other:                ├───────────────┼───────────────╢
             ║  7) KlipperScreen     │ {self.klipperscreen_local:<22} │ {self.klipperscreen_remote:<22} ║
             ║  8) Mobileraker       │ {self.mobileraker_local:<22} │ {self.mobileraker_remote:<22} ║
             ║  9) Crowsnest         │ {self.crowsnest_local:<22} │ {self.crowsnest_remote:<22} ║
             ║ 10) OctoEverywhere    │ {self.octoeverywhere_local:<22} │ {self.octoeverywhere_remote:<22} ║
             ║                       ├───────────────┴───────────────╢
-            ║ 11) System            │                               ║
+            ║ 11) System            │ {sysupgrades:^{padding}} ║
             ╟───────────────────────┴───────────────────────────────╢
             """
         )[1:]
         print(menu, end="")
 
-    def update_all(self, **kwargs):
+    def update_all(self, **kwargs) -> None:
         print("update_all")
 
-    def update_klipper(self, **kwargs):
+    def update_klipper(self, **kwargs) -> None:
         if self._check_is_installed("klipper"):
             update_klipper()
 
-    def update_moonraker(self, **kwargs):
+    def update_moonraker(self, **kwargs) -> None:
         if self._check_is_installed("moonraker"):
             update_moonraker()
 
-    def update_mainsail(self, **kwargs):
+    def update_mainsail(self, **kwargs) -> None:
         if self._check_is_installed("mainsail"):
             update_client(self.mainsail_data)
 
-    def update_mainsail_config(self, **kwargs):
+    def update_mainsail_config(self, **kwargs) -> None:
         if self._check_is_installed("mainsail_config"):
             update_client_config(self.mainsail_data)
 
-    def update_fluidd(self, **kwargs):
+    def update_fluidd(self, **kwargs) -> None:
         if self._check_is_installed("fluidd"):
             update_client(self.fluidd_data)
 
-    def update_fluidd_config(self, **kwargs):
+    def update_fluidd_config(self, **kwargs) -> None:
         if self._check_is_installed("fluidd_config"):
             update_client_config(self.fluidd_data)
 
-    def update_klipperscreen(self, **kwargs):
+    def update_klipperscreen(self, **kwargs) -> None:
         if self._check_is_installed("klipperscreen"):
             update_klipperscreen()
 
-    def update_mobileraker(self, **kwargs):
+    def update_mobileraker(self, **kwargs) -> None:
         if self._check_is_installed("mobileraker"):
             update_mobileraker()
 
-    def update_crowsnest(self, **kwargs):
+    def update_crowsnest(self, **kwargs) -> None:
         if self._check_is_installed("crowsnest"):
             update_crowsnest()
 
-    def update_octoeverywhere(self, **kwargs):
+    def update_octoeverywhere(self, **kwargs) -> None:
         if self._check_is_installed("octoeverywhere"):
             update_octoeverywhere()
 
-    def update_spoolman(self, **kwargs):
-        update_spoolman()
+    def upgrade_system_packages(self, **kwargs) -> None:
+        self._run_system_updates()
 
-    def upgrade_system_packages(self, **kwargs): ...
-
-    def _fetch_update_status(self):
+    def _fetch_update_status(self) -> None:
         self._set_status_data("klipper", get_klipper_status)
         self._set_status_data("moonraker", get_moonraker_status)
         self._set_status_data("mainsail", get_client_status, self.mainsail_data, True)
@@ -219,7 +228,10 @@ class UpdateMenu(BaseMenu):
         self._set_status_data("mobileraker", get_mobileraker_status)
         self._set_status_data("crowsnest", get_crowsnest_status)
         self._set_status_data("octoeverywhere", get_octoeverywhere_status)
-        self._set_status_data("spoolman", get_spoolman_status)
+
+        update_system_package_lists(silent=True)
+        self.packages = get_upgradable_packages()
+        self.package_count = len(self.packages)
 
     def _format_local_status(self, local_version, remote_version) -> str:
         color = COLOR_RED
@@ -232,7 +244,7 @@ class UpdateMenu(BaseMenu):
 
         return f"{color}{local_version or '-'}{RESET_FORMAT}"
 
-    def _set_status_data(self, name: str, status_fn: callable, *args) -> None:
+    def _set_status_data(self, name: str, status_fn: Callable, *args) -> None:
         comp_status: ComponentStatus = status_fn(*args)
 
         self.status_data[name]["installed"] = True if comp_status.status == 2 else False
@@ -257,3 +269,23 @@ class UpdateMenu(BaseMenu):
             Logger.print_info(f"{name.capitalize()} is not installed! Skipped ...")
             return False
         return True
+
+    def _run_system_updates(self) -> None:
+        if not self.packages:
+            Logger.print_info("No system upgrades available!")
+            return
+
+        try:
+            pkgs: str = ", ".join(self.packages)
+            Logger.print_dialog(
+                DialogType.CUSTOM,
+                ["The following packages will be upgraded:", "\n\n", pkgs],
+                custom_title="UPGRADABLE SYSTEM UPDATES",
+            )
+            if not get_confirm("Continue?"):
+                return
+            Logger.print_status("Upgrading system packages ...")
+            upgrade_system_packages(self.packages)
+        except Exception as e:
+            Logger.print_error(f"Error upgrading system packages:\n{e}")
+            raise

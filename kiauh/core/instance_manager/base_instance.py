@@ -9,163 +9,50 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-from utils.constants import CURRENT_USER, SYSTEMD
-from utils.logger import Logger
+from utils.fs_utils import get_data_dir
+
+SUFFIX_BLACKLIST: List[str] = ["None", "mcu", "obico", "bambu", "companion"]
 
 
-class BaseInstance(ABC):
-    @classmethod
-    def blacklist(cls) -> List[str]:
-        return []
+@dataclass(repr=True)
+class BaseInstance:
+    instance_type: type
+    suffix: str
+    log_file_name: str | None = None
+    data_dir: Path = field(init=False)
+    base_folders: List[Path] = field(init=False)
+    cfg_dir: Path = field(init=False)
+    log_dir: Path = field(init=False)
+    gcodes_dir: Path = field(init=False)
+    comms_dir: Path = field(init=False)
+    sysd_dir: Path = field(init=False)
+    is_legacy_instance: bool = field(init=False)
 
-    def __init__(
-        self,
-        suffix: str,
-        instance_type: BaseInstance,
-    ):
-        self._instance_type = instance_type
-        self._suffix = suffix
-        self._user = CURRENT_USER
-        self._data_dir_name = self.get_data_dir_name_from_suffix()
-        self._data_dir = Path.home().joinpath(f"{self._data_dir_name}_data")
-        self._cfg_dir = self.data_dir.joinpath("config")
-        self._log_dir = self.data_dir.joinpath("logs")
-        self._comms_dir = self.data_dir.joinpath("comms")
-        self._sysd_dir = self.data_dir.joinpath("systemd")
-        self._gcodes_dir = self.data_dir.joinpath("gcodes")
-
-    @property
-    def instance_type(self) -> BaseInstance:
-        return self._instance_type
-
-    @instance_type.setter
-    def instance_type(self, value: BaseInstance) -> None:
-        self._instance_type = value
-
-    @property
-    def suffix(self) -> str:
-        return self._suffix
-
-    @suffix.setter
-    def suffix(self, value: str) -> None:
-        self._suffix = value
-
-    @property
-    def user(self) -> str:
-        return self._user
-
-    @user.setter
-    def user(self, value: str) -> None:
-        self._user = value
-
-    @property
-    def data_dir_name(self) -> str:
-        return self._data_dir_name
-
-    @data_dir_name.setter
-    def data_dir_name(self, value: str) -> None:
-        self._data_dir_name = value
-
-    @property
-    def data_dir(self) -> Path:
-        return self._data_dir
-
-    @data_dir.setter
-    def data_dir(self, value: Path) -> None:
-        self._data_dir = value
-
-    @property
-    def cfg_dir(self) -> Path:
-        return self._cfg_dir
-
-    @cfg_dir.setter
-    def cfg_dir(self, value: Path) -> None:
-        self._cfg_dir = value
-
-    @property
-    def log_dir(self) -> Path:
-        return self._log_dir
-
-    @log_dir.setter
-    def log_dir(self, value: Path) -> None:
-        self._log_dir = value
-
-    @property
-    def comms_dir(self) -> Path:
-        return self._comms_dir
-
-    @comms_dir.setter
-    def comms_dir(self, value: Path) -> None:
-        self._comms_dir = value
-
-    @property
-    def sysd_dir(self) -> Path:
-        return self._sysd_dir
-
-    @sysd_dir.setter
-    def sysd_dir(self, value: Path) -> None:
-        self._sysd_dir = value
-
-    @property
-    def gcodes_dir(self) -> Path:
-        return self._gcodes_dir
-
-    @gcodes_dir.setter
-    def gcodes_dir(self, value: Path) -> None:
-        self._gcodes_dir = value
-
-    @abstractmethod
-    def create(self) -> None:
-        raise NotImplementedError("Subclasses must implement the create method")
-
-    @abstractmethod
-    def delete(self) -> None:
-        raise NotImplementedError("Subclasses must implement the delete method")
-
-    def create_folders(self, add_dirs: Optional[List[Path]] = None) -> None:
-        dirs = [
+    def __post_init__(self):
+        self.data_dir = get_data_dir(self.instance_type, self.suffix)
+        # the following attributes require the data_dir to be set
+        self.cfg_dir = self.data_dir.joinpath("config")
+        self.log_dir = self.data_dir.joinpath("logs")
+        self.gcodes_dir = self.data_dir.joinpath("gcodes")
+        self.comms_dir = self.data_dir.joinpath("comms")
+        self.sysd_dir = self.data_dir.joinpath("systemd")
+        self.is_legacy_instance = self._set_is_legacy_instance()
+        self.base_folders = [
             self.data_dir,
             self.cfg_dir,
             self.log_dir,
+            self.gcodes_dir,
             self.comms_dir,
             self.sysd_dir,
         ]
 
-        if add_dirs:
-            dirs.extend(add_dirs)
+    def _set_is_legacy_instance(self) -> bool:
+        legacy_pattern = r"^(?!printer)(.+)_data"
+        match = re.search(legacy_pattern, self.data_dir.name)
 
-        for _dir in dirs:
-            _dir.mkdir(exist_ok=True)
-
-    def get_service_file_name(self, extension: bool = False) -> str:
-        from utils.common import convert_camelcase_to_kebabcase
-
-        name = convert_camelcase_to_kebabcase(self.__class__.__name__)
-        if self.suffix != "":
-            name += f"-{self.suffix}"
-
-        return name if not extension else f"{name}.service"
-
-    def get_service_file_path(self) -> Path:
-        return SYSTEMD.joinpath(self.get_service_file_name(extension=True))
-
-    def get_data_dir_name_from_suffix(self) -> str:
-        if self._suffix == "":
-            return "printer"
-        elif self._suffix.isdigit():
-            return f"printer_{self._suffix}"
-        else:
-            return self._suffix
-
-    def delete_logfiles(self, log_name: str) -> None:
-        from utils.fs_utils import run_remove_routines
-
-        files = self.log_dir.iterdir()
-        logs = [f for f in files if f.name.startswith(log_name)]
-        for log in logs:
-            Logger.print_status(f"Remove '{log}'")
-            run_remove_routines(log)
+        return True if (match and self.suffix != "") else False

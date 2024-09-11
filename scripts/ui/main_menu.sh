@@ -29,6 +29,7 @@ function main_ui() {
   echo -e "|                  |  OctoEverywhere: $(print_status "octoeverywhere")|"
   echo -e "|                  |     Mobileraker: $(print_status "mobileraker")|"
   echo -e "|                  |         OctoApp: $(print_status "octoapp")|"
+  echo -e "|                  |        Spoolman: $(print_status "spoolman")|"
   echo -e "|                  |                                    |"
   echo -e "|                  |       Octoprint: $(print_status "octoprint")|"
   hr
@@ -39,7 +40,7 @@ function main_ui() {
 function get_kiauh_version() {
   local version
   cd "${KIAUH_SRCDIR}"
-  version="$(git describe HEAD --always --tags | cut -d "-" -f 1,2)"
+  version="$(git tag -l 'v5*' | tail -1)"
   echo "${version}"
 }
 
@@ -91,9 +92,6 @@ function print_klipper_repo() {
 function main_menu() {
   clear && print_header
   main_ui
-
-  ### initialize kiauh.ini
-  init_ini
 
   local action
   while true; do

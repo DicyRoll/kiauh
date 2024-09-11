@@ -8,10 +8,11 @@
 # ======================================================================= #
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from subprocess import CalledProcessError, run
-from typing import List
+from subprocess import CalledProcessError
 
+from components.klipper.klipper import Klipper
 from components.moonraker import (
     MOONRAKER_CFG_NAME,
     MOONRAKER_DIR,
@@ -21,52 +22,58 @@ from components.moonraker import (
     MOONRAKER_LOG_NAME,
     MOONRAKER_SERVICE_TEMPLATE,
 )
+from core.constants import CURRENT_USER
 from core.instance_manager.base_instance import BaseInstance
+from core.logger import Logger
 from core.submodules.simple_config_parser.src.simple_config_parser.simple_config_parser import (
     SimpleConfigParser,
 )
-from utils.logger import Logger
+from utils.fs_utils import create_folders
+from utils.sys_utils import get_service_file_path
 
 
 # noinspection PyMethodMayBeStatic
-class Moonraker(BaseInstance):
-    @classmethod
-    def blacklist(cls) -> List[str]:
-        return ["None", "mcu", "obico"]
+@dataclass
+class Moonraker:
+    suffix: str
+    base: BaseInstance = field(init=False, repr=False)
+    service_file_path: Path = field(init=False)
+    log_file_name: str = MOONRAKER_LOG_NAME
+    moonraker_dir: Path = MOONRAKER_DIR
+    env_dir: Path = MOONRAKER_ENV_DIR
+    data_dir: Path = field(init=False)
+    cfg_file: Path = field(init=False)
+    backup_dir: Path = field(init=False)
+    certs_dir: Path = field(init=False)
+    db_dir: Path = field(init=False)
+    port: int | None = field(init=False)
 
-    def __init__(self, suffix: str = ""):
-        super().__init__(instance_type=self, suffix=suffix)
-        self.moonraker_dir: Path = MOONRAKER_DIR
-        self.env_dir: Path = MOONRAKER_ENV_DIR
-        self.cfg_file = self.cfg_dir.joinpath(MOONRAKER_CFG_NAME)
-        self.port = self._get_port()
-        self.backup_dir = self.data_dir.joinpath("backup")
-        self.certs_dir = self.data_dir.joinpath("certs")
-        self._db_dir = self.data_dir.joinpath("database")
-        self._comms_dir = self.data_dir.joinpath("comms")
-        self.log = self.log_dir.joinpath(MOONRAKER_LOG_NAME)
+    def __post_init__(self):
+        self.base: BaseInstance = BaseInstance(Klipper, self.suffix)
+        self.base.log_file_name = self.log_file_name
 
-    @property
-    def db_dir(self) -> Path:
-        return self._db_dir
+        self.service_file_path: Path = get_service_file_path(Moonraker, self.suffix)
+        self.data_dir: Path = self.base.data_dir
+        self.cfg_file: Path = self.base.cfg_dir.joinpath(MOONRAKER_CFG_NAME)
+        self.backup_dir: Path = self.base.data_dir.joinpath("backup")
+        self.certs_dir: Path = self.base.data_dir.joinpath("certs")
+        self.db_dir: Path = self.base.data_dir.joinpath("database")
+        self.port: int | None = self._get_port()
 
-    @property
-    def comms_dir(self) -> Path:
-        return self._comms_dir
-
-    def create(self, create_example_cfg: bool = False) -> None:
+    def create(self) -> None:
         from utils.sys_utils import create_env_file, create_service_file
 
         Logger.print_status("Creating new Moonraker Instance ...")
 
         try:
-            self.create_folders([self.backup_dir, self.certs_dir, self._db_dir])
+            create_folders(self.base.base_folders)
+
             create_service_file(
-                name=self.get_service_file_name(extension=True),
+                name=self.service_file_path.name,
                 content=self._prep_service_file_content(),
             )
             create_env_file(
-                path=self.sysd_dir.joinpath(MOONRAKER_ENV_FILE_NAME),
+                path=self.base.sysd_dir.joinpath(MOONRAKER_ENV_FILE_NAME),
                 content=self._prep_env_file_content(),
             )
 
@@ -75,21 +82,6 @@ class Moonraker(BaseInstance):
             raise
         except OSError as e:
             Logger.print_error(f"Error creating env file: {e}")
-            raise
-
-    def delete(self) -> None:
-        service_file = self.get_service_file_name(extension=True)
-        service_file_path = self.get_service_file_path()
-
-        Logger.print_status(f"Removing Moonraker Instance: {service_file}")
-
-        try:
-            command = ["sudo", "rm", "-f", service_file_path]
-            run(command, check=True)
-            self.delete_logfiles(MOONRAKER_LOG_NAME)
-            Logger.print_ok("Instance successfully removed!")
-        except CalledProcessError as e:
-            Logger.print_error(f"Error removing instance: {e}")
             raise
 
     def _prep_service_file_content(self) -> str:
@@ -104,7 +96,7 @@ class Moonraker(BaseInstance):
 
         service_content = template_content.replace(
             "%USER%",
-            self.user,
+            CURRENT_USER,
         )
         service_content = service_content.replace(
             "%MOONRAKER_DIR%",
@@ -116,7 +108,7 @@ class Moonraker(BaseInstance):
         )
         service_content = service_content.replace(
             "%ENV_FILE%",
-            self.sysd_dir.joinpath(MOONRAKER_ENV_FILE_NAME).as_posix(),
+            self.base.sysd_dir.joinpath(MOONRAKER_ENV_FILE_NAME).as_posix(),
         )
         return service_content
 
@@ -136,17 +128,17 @@ class Moonraker(BaseInstance):
         )
         env_file_content = env_file_content.replace(
             "%PRINTER_DATA%",
-            self.data_dir.as_posix(),
+            self.base.data_dir.as_posix(),
         )
 
         return env_file_content
 
     def _get_port(self) -> int | None:
-        if not self.cfg_file.is_file():
+        if not self.cfg_file or not self.cfg_file.is_file():
             return None
 
         scp = SimpleConfigParser()
         scp.read(self.cfg_file)
-        port = scp.getint("server", "port", fallback=None)
+        port: int | None = scp.getint("server", "port", fallback=None)
 
         return port

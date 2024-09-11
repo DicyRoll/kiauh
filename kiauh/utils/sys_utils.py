@@ -6,6 +6,7 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import os
 import re
@@ -16,15 +17,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import venv
 from pathlib import Path
-from subprocess import DEVNULL, PIPE, CalledProcessError, Popen, run
-from typing import List, Literal
+from subprocess import DEVNULL, PIPE, CalledProcessError, Popen, check_output, run
+from typing import List, Literal, Set
 
-from utils.constants import SYSTEMD
-from utils.fs_utils import check_file_exist
+from core.constants import SYSTEMD
+from core.logger import Logger
+from utils.fs_utils import check_file_exist, remove_with_sudo
 from utils.input_utils import get_confirm
-from utils.logger import Logger
 
 SysCtlServiceAction = Literal[
     "start",
@@ -37,6 +37,10 @@ SysCtlServiceAction = Literal[
     "unmask",
 ]
 SysCtlManageAction = Literal["daemon-reload", "reset-failed"]
+
+
+class VenvCreationFailedException(Exception):
+    pass
 
 
 def kill(opt_err_msg: str = "") -> None:
@@ -87,34 +91,40 @@ def parse_packages_from_file(source_file: Path) -> List[str]:
     return packages
 
 
-def create_python_venv(target: Path) -> None:
+def create_python_venv(target: Path, force: bool = False) -> bool:
     """
-    Create a python 3 virtualenv at the provided target destination |
+    Create a python 3 virtualenv at the provided target destination.
+    Returns True if the virtualenv was created successfully.
+    Returns False if the virtualenv already exists, recreation was declined or creation failed.
+    :param force: Force recreation of the virtualenv
     :param target: Path where to create the virtualenv at
-    :return: None
+    :return: bool
     """
     Logger.print_status("Set up Python virtual environment ...")
     if not target.exists():
         try:
-            venv.create(target, with_pip=True)
+            cmd = ["virtualenv", "-p", "/usr/bin/python3", target.as_posix()]
+            run(cmd, check=True)
             Logger.print_ok("Setup of virtualenv successful!")
-        except OSError as e:
-            Logger.print_error(f"Error setting up virtualenv:\n{e}")
-            raise
+            return True
         except CalledProcessError as e:
-            Logger.print_error(f"Error setting up virtualenv:\n{e.output.decode()}")
-            raise
+            Logger.print_error(f"Error setting up virtualenv:\n{e}")
+            return False
     else:
-        if get_confirm("Virtualenv already exists. Re-create?", default_choice=False):
-            try:
-                shutil.rmtree(target)
-                create_python_venv(target)
-            except OSError as e:
-                log = f"Error removing existing virtualenv: {e.strerror}"
-                Logger.print_error(log, False)
-                raise
-        else:
+        if not force and not get_confirm(
+            "Virtualenv already exists. Re-create?", default_choice=False
+        ):
             Logger.print_info("Skipping re-creation of virtualenv ...")
+            return False
+
+        try:
+            shutil.rmtree(target)
+            create_python_venv(target)
+            return True
+        except OSError as e:
+            log = f"Error removing existing virtualenv: {e.strerror}"
+            Logger.print_error(log, False)
+            return False
 
 
 def update_python_pip(target: Path) -> None:
@@ -125,12 +135,13 @@ def update_python_pip(target: Path) -> None:
     """
     Logger.print_status("Updating pip ...")
     try:
-        pip_location = target.joinpath("bin/pip")
-        pip_exists = check_file_exist(pip_location)
+        pip_location: Path = target.joinpath("bin/pip")
+        pip_exists: bool = check_file_exist(pip_location)
+
         if not pip_exists:
             raise FileNotFoundError("Error updating pip! Not found.")
 
-        command = [pip_location, "install", "-U", "pip"]
+        command = [pip_location.as_posix(), "install", "-U", "pip"]
         result = run(command, stderr=PIPE, text=True)
         if result.returncode != 0 or result.stderr:
             Logger.print_error(f"{result.stderr}", False)
@@ -159,7 +170,7 @@ def install_python_requirements(target: Path, requirements: Path) -> None:
 
         Logger.print_status("Installing Python requirements ...")
         command = [
-            target.joinpath("bin/pip"),
+            target.joinpath("bin/pip").as_posix(),
             "install",
             "-r",
             f"{requirements}",
@@ -168,14 +179,14 @@ def install_python_requirements(target: Path, requirements: Path) -> None:
 
         if result.returncode != 0 or result.stderr:
             Logger.print_error(f"{result.stderr}", False)
-            Logger.print_error("Installing Python requirements failed!")
-            return
+            raise VenvCreationFailedException("Installing Python requirements failed!")
 
         Logger.print_ok("Installing Python requirements successful!")
-    except CalledProcessError as e:
-        log = f"Error installing Python requirements:\n{e.output.decode()}"
+
+    except Exception as e:
+        log = f"Error installing Python requirements: {e}"
         Logger.print_error(log)
-        raise
+        raise VenvCreationFailedException(log)
 
 
 def update_system_package_lists(silent: bool, rls_info_change=False) -> None:
@@ -185,8 +196,8 @@ def update_system_package_lists(silent: bool, rls_info_change=False) -> None:
     :param rls_info_change: Flag for "--allow-releaseinfo-change"
     :return: None
     """
-    cache_mtime = 0
-    cache_files = [
+    cache_mtime: float = 0
+    cache_files: List[Path] = [
         Path("/var/lib/apt/periodic/update-success-stamp"),
         Path("/var/lib/apt/lists"),
     ]
@@ -220,7 +231,26 @@ def update_system_package_lists(silent: bool, rls_info_change=False) -> None:
         raise
 
 
-def check_package_install(packages: List[str]) -> List[str]:
+def get_upgradable_packages() -> List[str]:
+    """
+    Reads all system packages that can be upgraded.
+    :return: A list of package names available for upgrade
+    """
+    try:
+        command = ["apt", "list", "--upgradable"]
+        output: str = check_output(command, stderr=DEVNULL, text=True, encoding="utf-8")
+        pkglist = []
+        for line in output.split("\n"):
+            if "/" not in line:
+                continue
+            pkg = line.split("/")[0]
+            pkglist.append(pkg)
+        return pkglist
+    except CalledProcessError as e:
+        raise Exception(f"Error reading upgradable packages: {e}")
+
+
+def check_package_install(packages: Set[str]) -> List[str]:
     """
     Checks the system for installed packages |
     :param packages: List of strings of package names
@@ -253,10 +283,27 @@ def install_system_packages(packages: List[str]) -> None:
             command.append(pkg)
         run(command, stderr=PIPE, check=True)
 
-        Logger.print_ok("Packages installed successfully.")
+        Logger.print_ok("Packages successfully installed.")
     except CalledProcessError as e:
         Logger.print_error(f"Error installing packages:\n{e.stderr.decode()}")
         raise
+
+
+def upgrade_system_packages(packages: List[str]) -> None:
+    """
+    Updates a list of system packages |
+    :param packages: List of system package names
+    :return: None
+    """
+    try:
+        command = ["sudo", "apt-get", "upgrade", "-y"]
+        for pkg in packages:
+            command.append(pkg)
+        run(command, stderr=PIPE, check=True)
+
+        Logger.print_ok("Packages successfully upgraded.")
+    except CalledProcessError as e:
+        raise Exception(f"Error upgrading packages:\n{e.stderr.decode()}")
 
 
 # this feels hacky and not quite right, but for now it works
@@ -272,7 +319,7 @@ def get_ipv4_addr() -> str:
     try:
         # doesn't even have to be reachable
         s.connect(("192.255.255.255", 1))
-        return s.getsockname()[0]
+        return str(s.getsockname()[0])
     except Exception:
         return "127.0.0.1"
     finally:
@@ -332,9 +379,9 @@ def set_nginx_permissions() -> None:
     """
     cmd = f"ls -ld {Path.home()} | cut -d' ' -f1"
     homedir_perm = run(cmd, shell=True, stdout=PIPE, text=True)
-    homedir_perm = homedir_perm.stdout
+    permissions = homedir_perm.stdout
 
-    if homedir_perm.count("x") < 3:
+    if permissions.count("x") < 3:
         Logger.print_status("Granting NGINX the required permissions ...")
         run(["chmod", "og+x", Path.home()])
         Logger.print_ok("Permissions granted.")
@@ -366,15 +413,18 @@ def cmd_sysctl_manage(action: SysCtlManageAction) -> None:
         raise
 
 
-def service_instance_exists(name: str, exclude: List[str] = None) -> bool:
+def unit_file_exists(
+    name: str, suffix: Literal["service", "timer"], exclude: List[str] | None = None
+) -> bool:
     """
-    Checks if a systemd service instance exists.
-    :param name: the service name
-    :param exclude: List of strings of service names to exclude
-    :return: True if the service exists, False otherwise
+    Checks if a systemd unit file of the provided suffix exists.
+    :param name: the name of the unit file
+    :param suffix: suffix of the unit file, either "service" or "timer"
+    :param exclude: List of strings of names to exclude
+    :return: True if the unit file exists, False otherwise
     """
     exclude = exclude or []
-    pattern = re.compile(f"^{name}(-[0-9a-zA-Z]+)?.service$")
+    pattern = re.compile(f"^{name}(-[0-9a-zA-Z]+)?.{suffix}$")
     service_list = [
         Path(SYSTEMD, service)
         for service in SYSTEMD.iterdir()
@@ -390,15 +440,16 @@ def log_process(process: Popen) -> None:
     :return: None
     """
     while True:
-        reads = [process.stdout.fileno()]
-        ret = select.select(reads, [], [])
-        for fd in ret[0]:
-            if fd == process.stdout.fileno():
-                line = process.stdout.readline()
-                if line:
-                    print(line.strip(), flush=True)
-                else:
-                    break
+        if process.stdout is not None:
+            reads = [process.stdout.fileno()]
+            ret = select.select(reads, [], [])
+            for fd in ret[0]:
+                if fd == process.stdout.fileno():
+                    line = process.stdout.readline()
+                    if line:
+                        print(line.strip(), flush=True)
+                    else:
+                        break
 
         if process.poll() is not None:
             break
@@ -438,3 +489,45 @@ def create_env_file(path: Path, content: str) -> None:
     except OSError as e:
         Logger.print_error(f"Error creating env file: {e}")
         raise
+
+
+def remove_system_service(service_name: str) -> None:
+    """
+    Disables and removes a systemd service
+    :param service_name: name of the service unit file - must end with '.service'
+    :return: None
+    """
+    try:
+        if not service_name.endswith(".service"):
+            raise ValueError(f"service_name '{service_name}' must end with '.service'")
+
+        file: Path = SYSTEMD.joinpath(service_name)
+        if not file.exists() or not file.is_file():
+            Logger.print_info(f"Service '{service_name}' does not exist! Skipped ...")
+            return
+
+        Logger.print_status(f"Removing {service_name} ...")
+        cmd_sysctl_service(service_name, "stop")
+        cmd_sysctl_service(service_name, "disable")
+        remove_with_sudo(file)
+        cmd_sysctl_manage("daemon-reload")
+        cmd_sysctl_manage("reset-failed")
+        Logger.print_ok(f"{service_name} successfully removed!")
+    except Exception as e:
+        Logger.print_error(f"Error removing {service_name}: {e}")
+        raise
+
+
+def get_service_file_path(instance_type: type, suffix: str) -> Path:
+    from utils.common import convert_camelcase_to_kebabcase
+
+    if not isinstance(instance_type, type):
+        raise ValueError("instance_type must be a class")
+
+    name: str = convert_camelcase_to_kebabcase(instance_type.__name__)
+    if suffix != "":
+        name += f"-{suffix}"
+
+    file_path: Path = SYSTEMD.joinpath(f"{name}.service")
+
+    return file_path

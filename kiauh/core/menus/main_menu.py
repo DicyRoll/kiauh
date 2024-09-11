@@ -6,9 +6,11 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import sys
 import textwrap
-from typing import Optional, Type
+from typing import Callable, Type
 
 from components.crowsnest.crowsnest import get_crowsnest_status
 from components.klipper.klipper_utils import get_klipper_status
@@ -17,13 +19,21 @@ from components.log_uploads.menus.log_upload_menu import LogUploadMenu
 from components.mobileraker.mobileraker import get_mobileraker_status
 from components.moonraker.moonraker_utils import get_moonraker_status
 from components.octoeverywhere.octoeverywhere_setup import get_octoeverywhere_status
-from components.spoolman.spoolman import get_spoolman_status
 from components.webui_client.client_utils import (
     get_client_status,
     get_current_client_config,
 )
 from components.webui_client.fluidd_data import FluiddData
 from components.webui_client.mainsail_data import MainsailData
+from core.constants import (
+    COLOR_CYAN,
+    COLOR_GREEN,
+    COLOR_MAGENTA,
+    COLOR_RED,
+    COLOR_YELLOW,
+    RESET_FORMAT,
+)
+from core.logger import Logger
 from core.menus import FooterType
 from core.menus.advanced_menu import AdvancedMenu
 from core.menus.backup_menu import BackupMenu
@@ -32,50 +42,44 @@ from core.menus.install_menu import InstallMenu
 from core.menus.remove_menu import RemoveMenu
 from core.menus.settings_menu import SettingsMenu
 from core.menus.update_menu import UpdateMenu
+from core.types import ComponentStatus, StatusMap, StatusText
 from extensions.extensions_menu import ExtensionsMenu
-from utils.constants import (
-    COLOR_CYAN,
-    COLOR_GREEN,
-    COLOR_MAGENTA,
-    COLOR_RED,
-    COLOR_YELLOW,
-    RESET_FORMAT,
-)
-from utils.logger import Logger
-from utils.types import ComponentStatus, StatusMap, StatusText
+from utils.common import get_kiauh_version
 
 
 # noinspection PyUnusedLocal
 # noinspection PyMethodMayBeStatic
 class MainMenu(BaseMenu):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
-        self.header = True
-        self.footer_type = FooterType.QUIT
+        self.header: bool = True
+        self.footer_type: FooterType = FooterType.QUIT
 
-        self.kl_status = self.kl_repo = self.mr_status = self.mr_repo = ""
+        self.version = ""
+        self.kl_status = self.kl_owner = self.kl_repo = ""
+        self.mr_status = self.mr_owner = self.mr_repo = ""
         self.ms_status = self.fl_status = self.ks_status = self.mb_status = ""
-        self.cn_status = self.cc_status = self.oe_status = self.sm_status = ""
-        self.init_status()
+        self.cn_status = self.cc_status = self.oe_status = ""
+        self._init_status()
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         """MainMenu does not have a previous menu"""
         pass
 
     def set_options(self) -> None:
         self.options = {
-            "0": Option(method=self.log_upload_menu, menu=True),
-            "1": Option(method=self.install_menu, menu=True),
-            "2": Option(method=self.update_menu, menu=True),
-            "3": Option(method=self.remove_menu, menu=True),
-            "4": Option(method=self.advanced_menu, menu=True),
-            "5": Option(method=self.backup_menu, menu=True),
-            "e": Option(method=self.extension_menu, menu=True),
-            "s": Option(method=self.settings_menu, menu=True),
+            "0": Option(method=self.log_upload_menu),
+            "1": Option(method=self.install_menu),
+            "2": Option(method=self.update_menu),
+            "3": Option(method=self.remove_menu),
+            "4": Option(method=self.advanced_menu),
+            "5": Option(method=self.backup_menu),
+            "e": Option(method=self.extension_menu),
+            "s": Option(method=self.settings_menu),
         }
 
-    def init_status(self) -> None:
+    def _init_status(self) -> None:
         status_vars = ["kl", "mr", "ms", "fl", "ks", "mb", "cn", "oe"]
         for var in status_vars:
             setattr(
@@ -84,7 +88,8 @@ class MainMenu(BaseMenu):
                 f"{COLOR_RED}Not installed{RESET_FORMAT}",
             )
 
-    def fetch_status(self) -> None:
+    def _fetch_status(self) -> None:
+        self.version = get_kiauh_version()
         self._get_component_status("kl", get_klipper_status)
         self._get_component_status("mr", get_moonraker_status)
         self._get_component_status("ms", get_client_status, MainsailData())
@@ -94,20 +99,21 @@ class MainMenu(BaseMenu):
         self._get_component_status("mb", get_mobileraker_status)
         self._get_component_status("cn", get_crowsnest_status)
         self._get_component_status("oe", get_octoeverywhere_status)
-        self._get_component_status("sm", get_spoolman_status)
 
-    def _get_component_status(self, name: str, status_fn: callable, *args) -> None:
+    def _get_component_status(self, name: str, status_fn: Callable, *args) -> None:
         status_data: ComponentStatus = status_fn(*args)
         code: int = status_data.status
         status: StatusText = StatusMap[code]
+        owner: str = status_data.owner
         repo: str = status_data.repo
         instance_count: int = status_data.instances
 
         count_txt: str = ""
-        if instance_count > 0 and code == 1:
+        if instance_count > 0 and code == 2:
             count_txt = f": {instance_count}"
 
         setattr(self, f"{name}_status", self._format_by_code(code, status, count_txt))
+        setattr(self, f"{name}_owner", f"{COLOR_CYAN}{owner}{RESET_FORMAT}")
         setattr(self, f"{name}_repo", f"{COLOR_CYAN}{repo}{RESET_FORMAT}")
 
     def _format_by_code(self, code: int, status: str, count: str) -> str:
@@ -121,11 +127,11 @@ class MainMenu(BaseMenu):
 
         return f"{color}{status}{count}{RESET_FORMAT}"
 
-    def print_menu(self):
-        self.fetch_status()
+    def print_menu(self) -> None:
+        self._fetch_status()
 
         header = " [ Main Menu ] "
-        footer1 = f"{COLOR_CYAN}KIAUH v6.0.0{RESET_FORMAT}"
+        footer1 = f"{COLOR_CYAN}{self.version}{RESET_FORMAT}"
         footer2 = f"Changelog: {COLOR_MAGENTA}https://git.io/JnmlX{RESET_FORMAT}"
         color = COLOR_CYAN
         count = 62 - len(color) - len(RESET_FORMAT)
@@ -137,20 +143,21 @@ class MainMenu(BaseMenu):
             ║ {color}{header:~^{count}}{RESET_FORMAT} ║
             ╟──────────────────┬────────────────────────────────────╢
             ║  0) [Log-Upload] │   Klipper: {self.kl_status:<{pad1}} ║
-            ║                  │      Repo: {self.kl_repo:<{pad1}} ║
-            ║  1) [Install]    ├────────────────────────────────────╢
-            ║  2) [Update]     │ Moonraker: {self.mr_status:<{pad1}} ║
-            ║  3) [Remove]     │      Repo: {self.mr_repo:<{pad1}} ║
-            ║  4) [Advanced]   ├────────────────────────────────────╢
-            ║  5) [Backup]     │        Mainsail: {self.ms_status:<{pad2}} ║
+            ║                  │     Owner: {self.kl_owner:<{pad1}} ║
+            ║  1) [Install]    │      Repo: {self.kl_repo:<{pad1}} ║
+            ║  2) [Update]     ├────────────────────────────────────╢
+            ║  3) [Remove]     │ Moonraker: {self.mr_status:<{pad1}} ║
+            ║  4) [Advanced]   │     Owner: {self.mr_owner:<{pad1}} ║
+            ║  5) [Backup]     │      Repo: {self.mr_repo:<{pad1}} ║
+            ║                  ├────────────────────────────────────╢
+            ║  S) [Settings]   │        Mainsail: {self.ms_status:<{pad2}} ║
             ║                  │          Fluidd: {self.fl_status:<{pad2}} ║
-            ║  S) [Settings]   │   Client-Config: {self.cc_status:<{pad2}} ║
-            ║                  │                                    ║
-            ║ Community:       │   KlipperScreen: {self.ks_status:<{pad2}} ║
-            ║  E) [Extensions] │     Mobileraker: {self.mb_status:<{pad2}} ║
+            ║ Community:       │   Client-Config: {self.cc_status:<{pad2}} ║
+            ║  E) [Extensions] │                                    ║
+            ║                  │   KlipperScreen: {self.ks_status:<{pad2}} ║
+            ║                  │     Mobileraker: {self.mb_status:<{pad2}} ║
             ║                  │  OctoEverywhere: {self.oe_status:<{pad2}} ║
             ║                  │       Crowsnest: {self.cn_status:<{pad2}} ║
-            ║                  │        Spoolman: {self.sm_status:<{pad2}} ║
             ╟──────────────────┼────────────────────────────────────╢
             ║ {footer1:^25} │ {footer2:^43} ║
             ╟──────────────────┴────────────────────────────────────╢
@@ -158,30 +165,30 @@ class MainMenu(BaseMenu):
         )[1:]
         print(menu, end="")
 
-    def exit(self, **kwargs):
+    def exit(self, **kwargs) -> None:
         Logger.print_ok("###### Happy printing!", False)
         sys.exit(0)
 
-    def log_upload_menu(self, **kwargs):
+    def log_upload_menu(self, **kwargs) -> None:
         LogUploadMenu().run()
 
-    def install_menu(self, **kwargs):
+    def install_menu(self, **kwargs) -> None:
         InstallMenu(previous_menu=self.__class__).run()
 
-    def update_menu(self, **kwargs):
+    def update_menu(self, **kwargs) -> None:
         UpdateMenu(previous_menu=self.__class__).run()
 
-    def remove_menu(self, **kwargs):
+    def remove_menu(self, **kwargs) -> None:
         RemoveMenu(previous_menu=self.__class__).run()
 
-    def advanced_menu(self, **kwargs):
+    def advanced_menu(self, **kwargs) -> None:
         AdvancedMenu(previous_menu=self.__class__).run()
 
-    def backup_menu(self, **kwargs):
+    def backup_menu(self, **kwargs) -> None:
         BackupMenu(previous_menu=self.__class__).run()
 
-    def settings_menu(self, **kwargs):
+    def settings_menu(self, **kwargs) -> None:
         SettingsMenu(previous_menu=self.__class__).run()
 
-    def extension_menu(self, **kwargs):
+    def extension_menu(self, **kwargs) -> None:
         ExtensionsMenu(previous_menu=self.__class__).run()

@@ -6,16 +6,21 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import json
 import subprocess
-from pathlib import Path
+from typing import List
 
 from components.klipper.klipper import Klipper
 from components.moonraker import (
     EXIT_MOONRAKER_SETUP,
+    MOONRAKER_DEPS_JSON_FILE,
     MOONRAKER_DIR,
     MOONRAKER_ENV_DIR,
+    MOONRAKER_INSTALL_SCRIPT,
     MOONRAKER_REQ_FILE,
+    MOONRAKER_SPEEDUPS_REQ_FILE,
     POLKIT_FILE,
     POLKIT_LEGACY_FILE,
     POLKIT_SCRIPT,
@@ -33,6 +38,7 @@ from components.webui_client.client_utils import (
 )
 from components.webui_client.mainsail_data import MainsailData
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import Logger
 from core.settings.kiauh_settings import KiauhSettings
 from utils.common import check_install_dependencies
 from utils.fs_utils import check_file_exist
@@ -41,10 +47,11 @@ from utils.input_utils import (
     get_confirm,
     get_selection_input,
 )
-from utils.logger import Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     check_python_version,
     cmd_sysctl_manage,
+    cmd_sysctl_service,
     create_python_venv,
     install_python_requirements,
     parse_packages_from_file,
@@ -52,70 +59,67 @@ from utils.sys_utils import (
 
 
 def install_moonraker() -> None:
-    if not check_moonraker_install_requirements():
+    klipper_list: List[Klipper] = get_instances(Klipper)
+
+    if not check_moonraker_install_requirements(klipper_list):
         return
 
-    kl_im = InstanceManager(Klipper)
-    klipper_instances = kl_im.instances
-    mr_im = InstanceManager(Moonraker)
-    moonraker_instances = mr_im.instances
+    moonraker_list: List[Moonraker] = get_instances(Moonraker)
+    instances: List[Moonraker] = []
+    selected_option: str | Klipper
 
-    selected_klipper_instance = 0
-    if len(klipper_instances) > 1:
+    if len(klipper_list) == 1:
+        instances.append(Moonraker(klipper_list[0].suffix))
+    else:
         print_moonraker_overview(
-            klipper_instances,
-            moonraker_instances,
+            klipper_list,
+            moonraker_list,
             show_index=True,
             show_select_all=True,
         )
-        options = [str(i) for i in range(len(klipper_instances))]
-        options.extend(["a", "A", "b", "B"])
+        options = {str(i + 1): k for i, k in enumerate(klipper_list)}
+        additional_options = {"a": None, "b": None}
+        options = {**options, **additional_options}
         question = "Select Klipper instance to setup Moonraker for"
-        selected_klipper_instance = get_selection_input(question, options).lower()
+        selected_option = get_selection_input(question, options)
 
-    instance_names = []
-    if selected_klipper_instance == "b":
-        Logger.print_status(EXIT_MOONRAKER_SETUP)
-        return
+        if selected_option == "b":
+            Logger.print_status(EXIT_MOONRAKER_SETUP)
+            return
 
-    elif selected_klipper_instance == "a":
-        for instance in klipper_instances:
-            instance_names.append(instance.suffix)
-
-    else:
-        index = int(selected_klipper_instance)
-        instance_names.append(klipper_instances[index].suffix)
+        if selected_option == "a":
+            instances.extend([Moonraker(k.suffix) for k in klipper_list])
+        else:
+            klipper_instance: Klipper | None = options.get(selected_option)
+            if klipper_instance is None:
+                raise Exception("Error selecting instance!")
+            instances.append(Moonraker(klipper_instance.suffix))
 
     create_example_cfg = get_confirm("Create example moonraker.conf?")
 
     try:
-        check_install_dependencies(["git"])
+        check_install_dependencies()
         setup_moonraker_prerequesites()
         install_moonraker_polkit()
 
-        used_ports_map = {
-            instance.suffix: instance.port for instance in moonraker_instances
-        }
-        for name in instance_names:
-            current_instance = Moonraker(suffix=name)
-
-            mr_im.current_instance = current_instance
-            mr_im.create_instance()
-            mr_im.enable_instance()
+        used_ports_map = {m.suffix: m.port for m in moonraker_list}
+        for instance in instances:
+            instance.create()
+            cmd_sysctl_service(instance.service_file_path.name, "enable")
 
             if create_example_cfg:
                 # if a webclient and/or it's config is installed, patch
                 # its update section to the config
                 clients = get_existing_clients()
-                create_example_moonraker_conf(current_instance, used_ports_map, clients)
+                create_example_moonraker_conf(instance, used_ports_map, clients)
 
-            mr_im.start_instance()
+            cmd_sysctl_service(instance.service_file_path.name, "start")
 
         cmd_sysctl_manage("daemon-reload")
 
         # if mainsail is installed, and we installed
         # multiple moonraker instances, we enable mainsails remote mode
-        if MainsailData().client_dir.exists() and len(mr_im.instances) > 1:
+        if MainsailData().client_dir.exists() and len(moonraker_list) > 1:
             enable_mainsail_remotemode()
 
     except Exception as e:
@@ -123,9 +127,9 @@ def install_moonraker() -> None:
         return
 
 
-def check_moonraker_install_requirements() -> bool:
+def check_moonraker_install_requirements(klipper_list: List[Klipper]) -> bool:
     def check_klipper_instances() -> bool:
-        if len(InstanceManager(Klipper).instances) >= 1:
+        if len(klipper_list) >= 1:
             return True
 
         Logger.print_warn("Klipper not installed!")
@@ -143,26 +147,25 @@ def setup_moonraker_prerequesites() -> None:
     git_clone_wrapper(repo, MOONRAKER_DIR, branch)
 
     # install moonraker dependencies and create python virtualenv
-    install_moonraker_packages(MOONRAKER_DIR)
-    create_python_venv(MOONRAKER_ENV_DIR)
-    install_python_requirements(MOONRAKER_ENV_DIR, MOONRAKER_REQ_FILE)
+    install_moonraker_packages()
+    if create_python_venv(MOONRAKER_ENV_DIR):
+        install_python_requirements(MOONRAKER_ENV_DIR, MOONRAKER_REQ_FILE)
+        install_python_requirements(MOONRAKER_ENV_DIR, MOONRAKER_SPEEDUPS_REQ_FILE)
 
 
-def install_moonraker_packages(moonraker_dir: Path) -> None:
-    install_script = moonraker_dir.joinpath("scripts/install-moonraker.sh")
-    deps_json = MOONRAKER_DIR.joinpath("scripts/system-dependencies.json")
+def install_moonraker_packages() -> None:
     moonraker_deps = []
 
-    if deps_json.exists():
-        with open(deps_json, "r") as deps:
+    if MOONRAKER_DEPS_JSON_FILE.exists():
+        with open(MOONRAKER_DEPS_JSON_FILE, "r") as deps:
             moonraker_deps = json.load(deps).get("debian", [])
-    elif install_script.exists():
-        moonraker_deps = parse_packages_from_file(install_script)
+    elif MOONRAKER_INSTALL_SCRIPT.exists():
+        moonraker_deps = parse_packages_from_file(MOONRAKER_INSTALL_SCRIPT)
 
     if not moonraker_deps:
         raise ValueError("Error reading Moonraker dependencies!")
 
-    check_install_dependencies(moonraker_deps)
+    check_install_dependencies({*moonraker_deps})
 
 
 def install_moonraker_polkit() -> None:
@@ -203,14 +206,14 @@ def update_moonraker() -> None:
     if settings.kiauh.backup_before_update:
         backup_moonraker_dir()
 
-    instance_manager = InstanceManager(Moonraker)
-    instance_manager.stop_all_instance()
+    instances = get_instances(Moonraker)
+    InstanceManager.stop_all(instances)
 
     git_pull_wrapper(repo=settings.moonraker.repo_url, target_dir=MOONRAKER_DIR)
 
     # install possible new system packages
-    install_moonraker_packages(MOONRAKER_DIR)
+    install_moonraker_packages()
     # install possible new python dependencies
     install_python_requirements(MOONRAKER_ENV_DIR, MOONRAKER_REQ_FILE)
 
-    instance_manager.start_all_instance()
+    InstanceManager.start_all(instances)

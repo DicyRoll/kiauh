@@ -8,6 +8,7 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import re
 import shutil
@@ -16,15 +17,8 @@ from subprocess import DEVNULL, PIPE, CalledProcessError, check_output, run
 from typing import List
 from zipfile import ZipFile
 
-from components.klipper.klipper import Klipper
-from utils import (
-    MODULE_PATH,
-    NGINX_CONFD,
-    NGINX_SITES_AVAILABLE,
-    NGINX_SITES_ENABLED,
-)
-from utils.decorators import deprecated
-from utils.logger import Logger
+from core.decorators import deprecated
+from core.logger import Logger
 
 
 def check_file_exist(file_path: Path, sudo=False) -> bool:
@@ -36,7 +30,7 @@ def check_file_exist(file_path: Path, sudo=False) -> bool:
     """
     if sudo:
         try:
-            command = ["sudo", "find", file_path]
+            command = ["sudo", "find", file_path.as_posix()]
             check_output(command, stderr=DEVNULL)
             return True
         except CalledProcessError:
@@ -50,7 +44,7 @@ def check_file_exist(file_path: Path, sudo=False) -> bool:
 
 def create_symlink(source: Path, target: Path, sudo=False) -> None:
     try:
-        cmd = ["ln", "-sf", source, target]
+        cmd = ["ln", "-sf", source.as_posix(), target.as_posix()]
         if sudo:
             cmd.insert(0, "sudo")
         run(cmd, stderr=PIPE, check=True)
@@ -61,10 +55,10 @@ def create_symlink(source: Path, target: Path, sudo=False) -> None:
 
 def remove_with_sudo(file: Path) -> None:
     try:
-        cmd = ["sudo", "rm", "-rf", file]
+        cmd = ["sudo", "rm", "-rf", file.as_posix()]
         run(cmd, stderr=PIPE, check=True)
     except CalledProcessError as e:
-        Logger.print_error(f"Failed to remove file: {e}")
+        Logger.print_error(f"Failed to remove {file}: {e}")
         raise
 
 
@@ -81,23 +75,23 @@ def remove_file(file_path: Path, sudo=False) -> None:
 
 def run_remove_routines(file: Path) -> None:
     try:
-        if not file.exists():
+        if not file.is_symlink() and not file.exists():
             Logger.print_info(f"File '{file}' does not exist. Skipped ...")
             return
 
         if file.is_dir():
             shutil.rmtree(file)
-        elif file.is_file():
+        elif file.is_file() or file.is_symlink():
             file.unlink()
         else:
             raise OSError(f"File '{file}' is neither a file nor a directory!")
-        Logger.print_ok("Successfully removed!")
+        Logger.print_ok(f"File '{file}' was successfully removed!")
     except OSError as e:
         Logger.print_error(f"Unable to delete '{file}':\n{e}")
         try:
             Logger.print_info("Trying to remove with sudo ...")
             remove_with_sudo(file)
-            Logger.print_ok("Successfully removed!")
+            Logger.print_ok(f"File '{file}' was successfully removed!")
         except CalledProcessError as e:
             Logger.print_error(f"Error deleting '{file}' with sudo:\n{e}")
             Logger.print_error("Remove this directory manually!")
@@ -114,143 +108,35 @@ def unzip(filepath: Path, target_dir: Path) -> None:
         _zip.extractall(target_dir)
 
 
-def copy_upstream_nginx_cfg() -> None:
-    """
-    Creates an upstream.conf in /etc/nginx/conf.d
-    :return: None
-    """
-    source = MODULE_PATH.joinpath("assets/upstreams.conf")
-    target = NGINX_CONFD.joinpath("upstreams.conf")
+def create_folders(dirs: List[Path]) -> None:
     try:
-        command = ["sudo", "cp", source, target]
-        run(command, stderr=PIPE, check=True)
-    except CalledProcessError as e:
-        log = f"Unable to create upstreams.conf: {e.stderr.decode()}"
-        Logger.print_error(log)
+        for _dir in dirs:
+            if _dir.exists():
+                continue
+            _dir.mkdir(exist_ok=True)
+            Logger.print_ok(f"Created directory '{_dir}'!")
+    except OSError as e:
+        Logger.print_error(f"Error creating directories: {e}")
         raise
 
 
-def copy_common_vars_nginx_cfg() -> None:
-    """
-    Creates a common_vars.conf in /etc/nginx/conf.d
-    :return: None
-    """
-    source = MODULE_PATH.joinpath("assets/common_vars.conf")
-    target = NGINX_CONFD.joinpath("common_vars.conf")
-    try:
-        command = ["sudo", "cp", source, target]
-        run(command, stderr=PIPE, check=True)
-    except CalledProcessError as e:
-        log = f"Unable to create upstreams.conf: {e.stderr.decode()}"
-        Logger.print_error(log)
-        raise
+def get_data_dir(instance_type: type, suffix: str) -> Path:
+    from utils.sys_utils import get_service_file_path
 
+    # if the service file exists, we read the data dir path from it
+    # this also ensures compatibility with pre v6.0.0 instances
+    service_file_path: Path = get_service_file_path(instance_type, suffix)
+    if service_file_path and service_file_path.exists():
+        with open(service_file_path, "r") as service_file:
+            lines = service_file.readlines()
+            for line in lines:
+                pattern = r"^EnvironmentFile=(.+)(/systemd/.+\.env)"
+                match = re.search(pattern, line)
+                if match:
+                    return Path(match.group(1))
 
-def generate_nginx_cfg_from_template(name: str, template_src: Path, **kwargs) -> None:
-    """
-    Creates an NGINX config from a template file and
-    replaces all placeholders passed as kwargs. A placeholder must be defined
-    in the template file as %{placeholder}%.
-    :param name: name of the config to create
-    :param template_src: the path to the template file
-    :return: None
-    """
-    tmp = Path.home().joinpath(f"{name}.tmp")
-    shutil.copy(template_src, tmp)
-    with open(tmp, "r+") as f:
-        content = f.read()
+    if suffix != "":
+        # this is the new data dir naming scheme introduced in v6.0.0
+        return Path.home().joinpath(f"printer_{suffix}_data")
 
-        for key, value in kwargs.items():
-            content = content.replace(f"%{key}%", str(value))
-
-        f.seek(0)
-        f.write(content)
-        f.truncate()
-
-    target = NGINX_SITES_AVAILABLE.joinpath(name)
-    try:
-        command = ["sudo", "mv", tmp, target]
-        run(command, stderr=PIPE, check=True)
-    except CalledProcessError as e:
-        log = f"Unable to create '{target}': {e.stderr.decode()}"
-        Logger.print_error(log)
-        raise
-
-
-def create_nginx_cfg(
-    display_name: str,
-    cfg_name: str,
-    template_src: Path,
-    **kwargs,
-) -> None:
-    from utils.sys_utils import set_nginx_permissions
-
-    try:
-        Logger.print_status(f"Creating NGINX config for {display_name} ...")
-
-        source = NGINX_SITES_AVAILABLE.joinpath(cfg_name)
-        target = NGINX_SITES_ENABLED.joinpath(cfg_name)
-        remove_file(Path("/etc/nginx/sites-enabled/default"), True)
-        generate_nginx_cfg_from_template(cfg_name, template_src=template_src, **kwargs)
-        create_symlink(source, target, True)
-        set_nginx_permissions()
-
-        Logger.print_ok(f"NGINX config for {display_name} successfully created.")
-    except Exception:
-        Logger.print_error(f"Creating NGINX config for {display_name} failed!")
-        raise
-
-
-def read_ports_from_nginx_configs() -> List[int]:
-    """
-    Helper function to iterate over all NGINX configs and read all ports defined for listen
-    :return: A sorted list of listen ports
-    """
-    if not NGINX_SITES_ENABLED.exists():
-        return []
-
-    port_list = []
-    for config in NGINX_SITES_ENABLED.iterdir():
-        with open(config, "r") as cfg:
-            lines = cfg.readlines()
-
-        for line in lines:
-            line = line.replace("default_server", "")
-            line = re.sub(r"[;:\[\]]", "", line.strip())
-            if line.startswith("listen") and line.split()[-1] not in port_list:
-                port_list.append(line.split()[-1])
-
-    ports_to_ints_list = [int(port) for port in port_list]
-    return sorted(ports_to_ints_list, key=lambda x: int(x))
-
-
-def is_valid_port(port: int, ports_in_use: List[int]) -> bool:
-    return port not in ports_in_use
-
-
-def get_next_free_port(ports_in_use: List[int]) -> int:
-    valid_ports = set(range(80, 7125))
-    used_ports = set(map(int, ports_in_use))
-
-    return min(valid_ports - used_ports)
-
-
-def remove_nginx_config(name: str) -> None:
-    Logger.print_status(f"Removing NGINX config for {name.capitalize()} ...")
-
-    run_remove_routines(NGINX_SITES_AVAILABLE.joinpath(name))
-    run_remove_routines(NGINX_SITES_ENABLED.joinpath(name))
-
-
-def remove_nginx_logs(name: str, instances: List[Klipper]) -> None:
-    Logger.print_status(f"Removing NGINX logs for {name.capitalize()} ...")
-
-    run_remove_routines(Path(f"/var/log/nginx/{name}-access.log"))
-    run_remove_routines(Path(f"/var/log/nginx/{name}-error.log"))
-
-    if not instances:
-        return
-
-    for instance in instances:
-        run_remove_routines(instance.log_dir.joinpath(f"{name}-access.log"))
-        run_remove_routines(instance.log_dir.joinpath(f"{name}-error.log"))
+    return Path.home().joinpath("printer_data")

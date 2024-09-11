@@ -7,7 +7,6 @@
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
 import json
-from pathlib import Path
 from typing import List
 
 from components.moonraker.moonraker import Moonraker
@@ -16,13 +15,15 @@ from components.octoeverywhere import (
     OE_DIR,
     OE_ENV_DIR,
     OE_INSTALL_SCRIPT,
-    OE_LOG_NAME,
+    OE_INSTALLER_LOG_FILE,
     OE_REPO,
     OE_REQ_FILE,
     OE_SYS_CFG_NAME,
 )
 from components.octoeverywhere.octoeverywhere import Octoeverywhere
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import DialogType, Logger
+from core.types import ComponentStatus
 from utils.common import (
     check_install_dependencies,
     get_install_status,
@@ -34,13 +35,11 @@ from utils.config_utils import (
 from utils.fs_utils import run_remove_routines
 from utils.git_utils import git_clone_wrapper
 from utils.input_utils import get_confirm
-from utils.logger import DialogType, Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
-    cmd_sysctl_manage,
     install_python_requirements,
     parse_packages_from_file,
 )
-from utils.types import ComponentStatus
 
 
 def get_octoeverywhere_status() -> ComponentStatus:
@@ -55,8 +54,7 @@ def install_octoeverywhere() -> None:
         return
 
     force_clone = False
-    oe_im = InstanceManager(Octoeverywhere)
-    oe_instances: List[Octoeverywhere] = oe_im.instances
+    oe_instances: List[Octoeverywhere] = get_instances(Octoeverywhere)
     if oe_instances:
         Logger.print_dialog(
             DialogType.INFO,
@@ -65,8 +63,6 @@ def install_octoeverywhere() -> None:
                 "It is safe to run the installer again to link your "
                 "printer or repair any issues.",
             ],
-            padding_top=0,
-            padding_bottom=0,
         )
         if not get_confirm("Re-run OctoEverywhere installation?"):
             Logger.print_info("Exiting OctoEverywhere for Klipper installation ...")
@@ -75,10 +71,9 @@ def install_octoeverywhere() -> None:
             Logger.print_status("Re-Installing OctoEverywhere for Klipper ...")
             force_clone = True
 
-    mr_im = InstanceManager(Moonraker)
-    mr_instances: List[Moonraker] = mr_im.instances
+    mr_instances: List[Moonraker] = get_instances(Moonraker)
 
-    mr_names = [f"● {moonraker.data_dir_name}" for moonraker in mr_instances]
+    mr_names = [f"● {moonraker.data_dir.name}" for moonraker in mr_instances]
     if len(mr_names) > 1:
         Logger.print_dialog(
             DialogType.INFO,
@@ -88,8 +83,6 @@ def install_octoeverywhere() -> None:
                 "\n\n",
                 "The setup will apply the same names to OctoEverywhere!",
             ],
-            padding_top=0,
-            padding_bottom=0,
         )
 
     if not get_confirm(
@@ -104,10 +97,10 @@ def install_octoeverywhere() -> None:
         git_clone_wrapper(OE_REPO, OE_DIR, force=force_clone)
 
         for moonraker in mr_instances:
-            oe_im.current_instance = Octoeverywhere(suffix=moonraker.suffix)
-            oe_im.create_instance()
+            instance = Octoeverywhere(suffix=moonraker.suffix)
+            instance.create()
 
-        mr_im.restart_all_instance()
+        InstanceManager.restart_all(mr_instances)
 
         Logger.print_dialog(
             DialogType.SUCCESS,
@@ -137,17 +130,16 @@ def update_octoeverywhere() -> None:
 
 def remove_octoeverywhere() -> None:
     Logger.print_status("Removing OctoEverywhere for Klipper ...")
-    mr_im = InstanceManager(Moonraker)
-    mr_instances: List[Moonraker] = mr_im.instances
-    ob_im = InstanceManager(Octoeverywhere)
-    ob_instances: List[Octoeverywhere] = ob_im.instances
+
+    mr_instances: List[Moonraker] = get_instances(Moonraker)
+    ob_instances: List[Octoeverywhere] = get_instances(Octoeverywhere)
 
     try:
-        remove_oe_instances(ob_im, ob_instances)
+        remove_oe_instances(ob_instances)
         remove_oe_dir()
         remove_oe_env()
         remove_config_section(f"include {OE_SYS_CFG_NAME}", mr_instances)
-        delete_oe_logs(ob_instances)
+        run_remove_routines(OE_INSTALLER_LOG_FILE)
         Logger.print_dialog(
             DialogType.SUCCESS,
             ["OctoEverywhere for Klipper successfully removed!"],
@@ -169,12 +161,11 @@ def install_oe_dependencies() -> None:
     if not oe_deps:
         raise ValueError("Error reading OctoEverywhere dependencies!")
 
-    check_install_dependencies(oe_deps)
+    check_install_dependencies({*oe_deps})
     install_python_requirements(OE_ENV_DIR, OE_REQ_FILE)
 
 
 def remove_oe_instances(
-    instance_manager: InstanceManager,
     instance_list: List[Octoeverywhere],
 ) -> None:
     if not instance_list:
@@ -182,13 +173,8 @@ def remove_oe_instances(
         return
 
     for instance in instance_list:
-        Logger.print_status(f"Removing instance {instance.get_service_file_name()} ...")
-        instance_manager.current_instance = instance
-        instance_manager.stop_instance()
-        instance_manager.disable_instance()
-        instance_manager.delete_instance()
-
-    cmd_sysctl_manage("daemon-reload")
+        Logger.print_status(f"Removing instance {instance.service_file_path.stem} ...")
+        InstanceManager.remove(instance)
 
 
 def remove_oe_dir() -> None:
@@ -209,23 +195,3 @@ def remove_oe_env() -> None:
         return
 
     run_remove_routines(OE_ENV_DIR)
-
-
-def delete_oe_logs(instances: List[Octoeverywhere]) -> None:
-    Logger.print_status("Removing OctoEverywhere logs ...")
-
-    all_logfiles = []
-    for instance in instances:
-        all_logfiles = list(instance.log_dir.glob(f"{OE_LOG_NAME}*"))
-
-    install_log = Path.home().joinpath("octoeverywhere-installer.log")
-    if install_log.exists():
-        all_logfiles.append(install_log)
-
-    if not all_logfiles:
-        Logger.print_info("No OctoEverywhere logs found. Skipped ...")
-        return
-
-    for log in all_logfiles:
-        Logger.print_status(f"Remove '{log}'")
-        run_remove_routines(log)

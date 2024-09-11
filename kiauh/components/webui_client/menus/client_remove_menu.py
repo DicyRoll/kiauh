@@ -6,46 +6,44 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import textwrap
-from typing import Optional, Type
+from typing import Type
 
 from components.webui_client import client_remove
-from components.webui_client.base_data import BaseWebClient, WebClientType
+from components.webui_client.base_data import BaseWebClient
+from core.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 from core.menus import Option
 from core.menus.base_menu import BaseMenu
-from utils.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 
 
 # noinspection PyUnusedLocal
 class ClientRemoveMenu(BaseMenu):
     def __init__(
-        self, client: BaseWebClient, previous_menu: Optional[Type[BaseMenu]] = None
+        self, client: BaseWebClient, previous_menu: Type[BaseMenu] | None = None
     ):
         super().__init__()
-        self.previous_menu = previous_menu
-        self.client = client
-        self.remove_client = False
-        self.remove_client_cfg = False
-        self.backup_mainsail_config_json = False
-        self.selection_state = False
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
+        self.client: BaseWebClient = client
+        self.remove_client: bool = False
+        self.remove_client_cfg: bool = False
+        self.backup_config_json: bool = False
+        self.selection_state: bool = False
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         from core.menus.remove_menu import RemoveMenu
 
-        self.previous_menu: Type[BaseMenu] = (
-            previous_menu if previous_menu is not None else RemoveMenu
-        )
+        self.previous_menu = previous_menu if previous_menu is not None else RemoveMenu
 
     def set_options(self) -> None:
         self.options = {
-            "a": Option(method=self.toggle_all, menu=False),
-            "1": Option(method=self.toggle_rm_client, menu=False),
-            "2": Option(method=self.toggle_rm_client_config, menu=False),
-            "c": Option(method=self.run_removal_process, menu=False),
+            "a": Option(method=self.toggle_all),
+            "1": Option(method=self.toggle_rm_client),
+            "2": Option(method=self.toggle_rm_client_config),
+            "3": Option(method=self.toggle_backup_config_json),
+            "c": Option(method=self.run_removal_process),
         }
-        if self.client.client == WebClientType.MAINSAIL:
-            self.options["3"] = Option(self.toggle_backup_mainsail_config_json, False)
 
     def print_menu(self) -> None:
         client_name = self.client.display_name
@@ -59,6 +57,7 @@ class ClientRemoveMenu(BaseMenu):
         unchecked = "[ ]"
         o1 = checked if self.remove_client else unchecked
         o2 = checked if self.remove_client_cfg else unchecked
+        o3 = checked if self.backup_config_json else unchecked
         menu = textwrap.dedent(
             f"""
             ╔═══════════════════════════════════════════════════════╗
@@ -71,19 +70,7 @@ class ClientRemoveMenu(BaseMenu):
             ╟───────────────────────────────────────────────────────╢
             ║  1) {o1} Remove {client_name:16}                       ║
             ║  2) {o2} Remove {client_config_name:24}               ║
-            """
-        )[1:]
-
-        if self.client.client == WebClientType.MAINSAIL:
-            o3 = checked if self.backup_mainsail_config_json else unchecked
-            menu += textwrap.dedent(
-                f"""
-                ║  3) {o3} Backup config.json                            ║
-                """
-            )[1:]
-
-        menu += textwrap.dedent(
-            """
+            ║  3) {o3} Backup config.json                            ║
             ╟───────────────────────────────────────────────────────╢
             ║  C) Continue                                          ║
             ╟───────────────────────────────────────────────────────╢
@@ -92,10 +79,10 @@ class ClientRemoveMenu(BaseMenu):
         print(menu, end="")
 
     def toggle_all(self, **kwargs) -> None:
-        self.remove_client = not self.remove_client
-        self.remove_client_cfg = not self.remove_client_cfg
-        self.backup_mainsail_config_json = not self.backup_mainsail_config_json
         self.selection_state = not self.selection_state
+        self.remove_client = self.selection_state
+        self.remove_client_cfg = self.selection_state
+        self.backup_config_json = self.selection_state
 
     def toggle_rm_client(self, **kwargs) -> None:
         self.remove_client = not self.remove_client
@@ -103,14 +90,14 @@ class ClientRemoveMenu(BaseMenu):
     def toggle_rm_client_config(self, **kwargs) -> None:
         self.remove_client_cfg = not self.remove_client_cfg
 
-    def toggle_backup_mainsail_config_json(self, **kwargs) -> None:
-        self.backup_mainsail_config_json = not self.backup_mainsail_config_json
+    def toggle_backup_config_json(self, **kwargs) -> None:
+        self.backup_config_json = not self.backup_config_json
 
     def run_removal_process(self, **kwargs) -> None:
         if (
             not self.remove_client
             and not self.remove_client_cfg
-            and not self.backup_mainsail_config_json
+            and not self.backup_config_json
         ):
             error = f"{COLOR_RED}Nothing selected ...{RESET_FORMAT}"
             print(error)
@@ -120,12 +107,12 @@ class ClientRemoveMenu(BaseMenu):
             client=self.client,
             remove_client=self.remove_client,
             remove_client_cfg=self.remove_client_cfg,
-            backup_ms_config_json=self.backup_mainsail_config_json,
+            backup_config=self.backup_config_json,
         )
 
         self.remove_client = False
         self.remove_client_cfg = False
-        self.backup_mainsail_config_json = False
+        self.backup_config_json = False
 
         self._go_back()
 

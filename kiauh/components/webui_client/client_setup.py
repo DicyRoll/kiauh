@@ -6,7 +6,8 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
-
+import shutil
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -27,27 +28,24 @@ from components.webui_client.client_dialogs import (
     print_moonraker_not_found_dialog,
 )
 from components.webui_client.client_utils import (
-    backup_mainsail_config_json,
-    detect_client_cfg_conflict,
-    enable_mainsail_remotemode,
-    restore_mainsail_config_json,
-    symlink_webui_nginx_log,
-)
-from core.instance_manager.instance_manager import InstanceManager
-from core.settings.kiauh_settings import KiauhSettings
-from utils.common import check_install_dependencies
-from utils.config_utils import add_config_section
-from utils.fs_utils import (
     copy_common_vars_nginx_cfg,
     copy_upstream_nginx_cfg,
     create_nginx_cfg,
+    detect_client_cfg_conflict,
+    enable_mainsail_remotemode,
     get_next_free_port,
     is_valid_port,
     read_ports_from_nginx_configs,
-    unzip,
+    symlink_webui_nginx_log,
 )
+from core.instance_manager.instance_manager import InstanceManager
+from core.logger import Logger
+from core.settings.kiauh_settings import KiauhSettings
+from utils.common import check_install_dependencies
+from utils.config_utils import add_config_section
+from utils.fs_utils import unzip
 from utils.input_utils import get_confirm, get_number_input
-from utils.logger import Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     cmd_sysctl_service,
     download_file,
@@ -65,8 +63,7 @@ def install_client(client: BaseWebClient) -> None:
         )
         return
 
-    mr_im = InstanceManager(Moonraker)
-    mr_instances: List[Moonraker] = mr_im.instances
+    mr_instances: List[Moonraker] = get_instances(Moonraker)
 
     enable_remotemode = False
     if not mr_instances:
@@ -83,8 +80,7 @@ def install_client(client: BaseWebClient) -> None:
     ):
         enable_remotemode = True
 
-    kl_im = InstanceManager(Klipper)
-    kl_instances = kl_im.instances
+    kl_instances = get_instances(Klipper)
     install_client_cfg = False
     client_config: BaseWebClientConfig = client.client_config
     if (
@@ -112,7 +108,7 @@ def install_client(client: BaseWebClient) -> None:
         )
         valid_port = is_valid_port(port, ports_in_use)
 
-    check_install_dependencies(["nginx", "unzip"])
+    check_install_dependencies({"nginx"})
 
     try:
         download_client(client)
@@ -129,7 +125,7 @@ def install_client(client: BaseWebClient) -> None:
                     ("path", str(client.client_dir)),
                 ],
             )
-            mr_im.restart_all_instance()
+            InstanceManager.restart_all(mr_instances)
         if install_client_cfg and kl_instances:
             install_client_config(client)
 
@@ -145,7 +141,7 @@ def install_client(client: BaseWebClient) -> None:
         )
 
         if kl_instances:
-            symlink_webui_nginx_log(kl_instances)
+            symlink_webui_nginx_log(client, kl_instances)
         cmd_sysctl_service("nginx", "restart")
 
     except Exception as e:
@@ -185,10 +181,10 @@ def update_client(client: BaseWebClient) -> None:
         )
         return
 
-    if client.client == WebClientType.MAINSAIL:
-        backup_mainsail_config_json(is_temp=True)
-
-    download_client(client)
-
-    if client.client == WebClientType.MAINSAIL:
-        restore_mainsail_config_json()
+    with tempfile.NamedTemporaryFile(suffix=".json") as tmp_file:
+        Logger.print_status(
+            f"Creating temporary backup of {client.config_file} as {tmp_file.name} ..."
+        )
+        shutil.copy(client.config_file, tmp_file.name)
+        download_client(client)
+        shutil.copy(tmp_file.name, client.config_file)

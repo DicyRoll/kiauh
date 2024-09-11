@@ -6,17 +6,16 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
+
 import re
-from typing import List, Union
+from typing import Dict, List
 
-from utils import INVALID_CHOICE
-from utils.constants import COLOR_CYAN, RESET_FORMAT
-from utils.logger import Logger
+from core.constants import COLOR_CYAN, INVALID_CHOICE, RESET_FORMAT
+from core.logger import Logger
 
 
-def get_confirm(
-    question: str, default_choice=True, allow_go_back=False
-) -> Union[bool, None]:
+def get_confirm(question: str, default_choice=True, allow_go_back=False) -> bool | None:
     """
     Helper method for validating confirmation (yes/no) user input. |
     :param question: The question to display
@@ -53,10 +52,10 @@ def get_confirm(
 def get_number_input(
     question: str,
     min_count: int,
-    max_count=None,
-    default=None,
-    allow_go_back=False,
-) -> Union[int, None]:
+    max_count: int | None = None,
+    default: int | None = None,
+    allow_go_back: bool = False,
+) -> int | None:
     """
     Helper method to get a number input from the user
     :param question: The question to display
@@ -73,7 +72,7 @@ def get_number_input(
         if allow_go_back and _input in options_go_back:
             return None
 
-        if _input == "":
+        if _input == "" and default is not None:
             return default
 
         try:
@@ -84,10 +83,10 @@ def get_number_input(
 
 def get_string_input(
     question: str,
-    regex: Union[str, None] = None,
-    exclude: Union[List, None] = None,
-    allow_special_chars=False,
-    default=None,
+    regex: str | None = None,
+    exclude: List[str] | None = None,
+    allow_special_chars: bool = False,
+    default: str | None = None,
 ) -> str:
     """
     Helper method to get a string input from the user
@@ -104,8 +103,6 @@ def get_string_input(
     while True:
         _input = input(_question)
 
-        print(_input)
-
         if _input.lower() in _exclude:
             Logger.print_error("This value is already in use/reserved.")
         elif default is not None and _input == "":
@@ -120,7 +117,7 @@ def get_string_input(
             Logger.print_error(INVALID_CHOICE)
 
 
-def get_selection_input(question: str, option_list: List, default=None) -> str:
+def get_selection_input(question: str, option_list: List | Dict, default=None) -> str:
     """
     Helper method to get a selection from a list of options from the user
     :param question: The question to display
@@ -129,12 +126,18 @@ def get_selection_input(question: str, option_list: List, default=None) -> str:
     :return: The option that was selected by the user
     """
     while True:
-        _input = input(format_question(question, default)).strip()
+        _input = input(format_question(question, default)).strip().lower()
 
-        if _input in option_list:
-            return _input
+        if isinstance(option_list, list):
+            if _input in option_list:
+                return _input
+        elif isinstance(option_list, dict):
+            if _input in option_list.keys():
+                return _input
+        else:
+            raise ValueError("Invalid option_list type")
 
-        Logger.print_error(INVALID_CHOICE)
+        Logger.print_error("Invalid option! Please select a valid option.", False)
 
 
 def format_question(question: str, default=None) -> str:
@@ -151,7 +154,7 @@ def format_question(question: str, default=None) -> str:
     return f"{COLOR_CYAN}###### {formatted_q}: {RESET_FORMAT}"
 
 
-def validate_number_input(value: str, min_count: int, max_count: int) -> int:
+def validate_number_input(value: str, min_count: int, max_count: int | None) -> int:
     """
     Helper method for a simple number input validation. |
     :param value: The value to validate

@@ -6,18 +6,20 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 from subprocess import DEVNULL, PIPE, CalledProcessError, run
-from typing import List, Union
+from typing import List
 
 from components.klipper.klipper_dialogs import print_instance_overview
 from components.moonraker import MOONRAKER_DIR, MOONRAKER_ENV_DIR
 from components.moonraker.moonraker import Moonraker
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import Logger
 from utils.fs_utils import run_remove_routines
 from utils.input_utils import get_selection_input
-from utils.logger import Logger
-from utils.sys_utils import cmd_sysctl_manage
+from utils.instance_utils import get_instances
+from utils.sys_utils import unit_file_exists
 
 
 def run_moonraker_removal(
@@ -26,17 +28,18 @@ def run_moonraker_removal(
     remove_env: bool,
     remove_polkit: bool,
 ) -> None:
-    im = InstanceManager(Moonraker)
+    instances = get_instances(Moonraker)
 
     if remove_service:
         Logger.print_status("Removing Moonraker instances ...")
-        if im.instances:
-            instances_to_remove = select_instances_to_remove(im.instances)
-            remove_instances(im, instances_to_remove)
+        if instances:
+            instances_to_remove = select_instances_to_remove(instances)
+            remove_instances(instances_to_remove)
         else:
             Logger.print_info("No Moonraker Services installed! Skipped ...")
 
-    if (remove_polkit or remove_dir or remove_env) and im.instances:
+    delete_remaining: bool = remove_polkit or remove_dir or remove_env
+    if delete_remaining and unit_file_exists("moonraker", suffix="service"):
         Logger.print_info("There are still other Moonraker services installed")
         Logger.print_info(
             "●  Moonraker PolicyKit rules were not removed.", prefix=False
@@ -57,10 +60,10 @@ def run_moonraker_removal(
 
 def select_instances_to_remove(
     instances: List[Moonraker],
-) -> Union[List[Moonraker], None]:
+) -> List[Moonraker] | None:
     start_index = 1
     options = [str(i + start_index) for i in range(len(instances))]
-    options.extend(["a", "A", "b", "B"])
+    options.extend(["a", "b"])
     instance_map = {options[i]: instances[i] for i in range(len(instances))}
 
     print_instance_overview(
@@ -72,9 +75,9 @@ def select_instances_to_remove(
     selection = get_selection_input("Select Moonraker instance to remove", options)
 
     instances_to_remove = []
-    if selection == "b".lower():
+    if selection == "b":
         return None
-    elif selection == "a".lower():
+    elif selection == "a":
         instances_to_remove.extend(instances)
     else:
         instances_to_remove.append(instance_map[selection])
@@ -83,17 +86,14 @@ def select_instances_to_remove(
 
 
 def remove_instances(
-    instance_manager: InstanceManager,
-    instance_list: List[Moonraker],
+    instance_list: List[Moonraker] | None,
 ) -> None:
+    if not instance_list:
+        Logger.print_info("No Moonraker instances found. Skipped ...")
+        return
     for instance in instance_list:
-        Logger.print_status(f"Removing instance {instance.get_service_file_name()} ...")
-        instance_manager.current_instance = instance
-        instance_manager.stop_instance()
-        instance_manager.disable_instance()
-        instance_manager.delete_instance()
-
-    cmd_sysctl_manage("daemon-reload")
+        Logger.print_status(f"Removing instance {instance.service_file_path.stem} ...")
+        InstanceManager.remove(instance)
 
 
 def remove_polkit_rules() -> None:
@@ -114,7 +114,7 @@ def remove_polkit_rules() -> None:
 def delete_moonraker_logs(instances: List[Moonraker]) -> None:
     all_logfiles = []
     for instance in instances:
-        all_logfiles = list(instance.log_dir.glob("moonraker.log*"))
+        all_logfiles = list(instance.base.log_dir.glob("moonraker.log*"))
     if not all_logfiles:
         Logger.print_info("No Moonraker logs found. Skipped ...")
         return

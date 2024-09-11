@@ -9,16 +9,16 @@
 import shutil
 from pathlib import Path
 
+from components.webui_client.client_utils import create_nginx_cfg
+from core.constants import NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED
+from core.logger import DialogType, Logger
 from extensions.base_extension import BaseExtension
-from utils import NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED
 from utils.common import check_install_dependencies
 from utils.fs_utils import (
-    create_nginx_cfg,
     remove_file,
 )
 from utils.git_utils import git_clone_wrapper, git_pull_wrapper
 from utils.input_utils import get_number_input
-from utils.logger import DialogType, Logger
 from utils.sys_utils import cmd_sysctl_service, get_ipv4_addr
 
 MODULE_PATH = Path(__file__).resolve().parent
@@ -48,17 +48,14 @@ class PrettyGcodeExtension(BaseExtension):
             allow_go_back=True,
         )
 
-        check_install_dependencies(["nginx"])
+        check_install_dependencies({"nginx"})
 
         try:
-            # remove any existing pgc dir
             if PGC_DIR.exists():
                 shutil.rmtree(PGC_DIR)
 
-            # clone pgc repo
             git_clone_wrapper(PGC_REPO, PGC_DIR)
 
-            # copy pgc conf
             create_nginx_cfg(
                 "PrettyGCode for Klipper",
                 cfg_name=PGC_CONF,

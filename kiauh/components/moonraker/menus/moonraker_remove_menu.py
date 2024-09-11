@@ -6,42 +6,41 @@
 #                                                                         #
 #  This file may be distributed under the terms of the GNU GPLv3 license  #
 # ======================================================================= #
+from __future__ import annotations
 
 import textwrap
-from typing import Optional, Type
+from typing import Type
 
 from components.moonraker import moonraker_remove
+from core.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 from core.menus import Option
 from core.menus.base_menu import BaseMenu
-from utils.constants import COLOR_CYAN, COLOR_RED, RESET_FORMAT
 
 
 # noinspection PyUnusedLocal
 class MoonrakerRemoveMenu(BaseMenu):
-    def __init__(self, previous_menu: Optional[Type[BaseMenu]] = None):
+    def __init__(self, previous_menu: Type[BaseMenu] | None = None):
         super().__init__()
-        self.previous_menu = previous_menu
+        self.previous_menu: Type[BaseMenu] | None = previous_menu
         self.remove_moonraker_service = False
         self.remove_moonraker_dir = False
         self.remove_moonraker_env = False
         self.remove_moonraker_polkit = False
         self.selection_state = False
 
-    def set_previous_menu(self, previous_menu: Optional[Type[BaseMenu]]) -> None:
+    def set_previous_menu(self, previous_menu: Type[BaseMenu] | None) -> None:
         from core.menus.remove_menu import RemoveMenu
 
-        self.previous_menu: Type[BaseMenu] = (
-            previous_menu if previous_menu is not None else RemoveMenu
-        )
+        self.previous_menu = previous_menu if previous_menu is not None else RemoveMenu
 
     def set_options(self) -> None:
         self.options = {
-            "a": Option(method=self.toggle_all, menu=False),
-            "1": Option(method=self.toggle_remove_moonraker_service, menu=False),
-            "2": Option(method=self.toggle_remove_moonraker_dir, menu=False),
-            "3": Option(method=self.toggle_remove_moonraker_env, menu=False),
-            "4": Option(method=self.toggle_remove_moonraker_polkit, menu=False),
-            "c": Option(method=self.run_removal_process, menu=False),
+            "a": Option(method=self.toggle_all),
+            "1": Option(method=self.toggle_remove_moonraker_service),
+            "2": Option(method=self.toggle_remove_moonraker_dir),
+            "3": Option(method=self.toggle_remove_moonraker_env),
+            "4": Option(method=self.toggle_remove_moonraker_polkit),
+            "c": Option(method=self.run_removal_process),
         }
 
     def print_menu(self) -> None:
@@ -76,11 +75,11 @@ class MoonrakerRemoveMenu(BaseMenu):
         print(menu, end="")
 
     def toggle_all(self, **kwargs) -> None:
-        self.remove_moonraker_service = not self.remove_moonraker_service
-        self.remove_moonraker_dir = not self.remove_moonraker_dir
-        self.remove_moonraker_env = not self.remove_moonraker_env
-        self.remove_moonraker_polkit = not self.remove_moonraker_polkit
         self.selection_state = not self.selection_state
+        self.remove_moonraker_service = self.selection_state
+        self.remove_moonraker_dir = self.selection_state
+        self.remove_moonraker_env = self.selection_state
+        self.remove_moonraker_polkit = self.selection_state
 
     def toggle_remove_moonraker_service(self, **kwargs) -> None:
         self.remove_moonraker_service = not self.remove_moonraker_service

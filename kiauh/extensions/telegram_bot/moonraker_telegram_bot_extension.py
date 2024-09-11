@@ -12,11 +12,12 @@ from typing import List
 
 from components.moonraker.moonraker import Moonraker
 from core.instance_manager.instance_manager import InstanceManager
+from core.logger import DialogType, Logger
 from extensions.base_extension import BaseExtension
+from extensions.telegram_bot import TG_BOT_REPO, TG_BOT_REQ_FILE
 from extensions.telegram_bot.moonraker_telegram_bot import (
-    TELEGRAM_BOT_DIR,
-    TELEGRAM_BOT_ENV,
-    TELEGRAM_BOT_REPO,
+    TG_BOT_DIR,
+    TG_BOT_ENV,
     MoonrakerTelegramBot,
 )
 from utils.common import check_install_dependencies
@@ -24,9 +25,10 @@ from utils.config_utils import add_config_section, remove_config_section
 from utils.fs_utils import remove_file
 from utils.git_utils import git_clone_wrapper, git_pull_wrapper
 from utils.input_utils import get_confirm
-from utils.logger import DialogType, Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import (
     cmd_sysctl_manage,
+    cmd_sysctl_service,
     create_python_venv,
     install_python_requirements,
     parse_packages_from_file,
@@ -37,8 +39,8 @@ from utils.sys_utils import (
 class TelegramBotExtension(BaseExtension):
     def install_extension(self, **kwargs) -> None:
         Logger.print_status("Installing Moonraker Telegram Bot ...")
-        mr_im = InstanceManager(Moonraker)
-        mr_instances: List[Moonraker] = mr_im.instances
+
+        mr_instances: List[Moonraker] = get_instances(Moonraker)
         if not mr_instances:
             Logger.print_dialog(
                 DialogType.WARNING,
@@ -50,7 +52,9 @@ class TelegramBotExtension(BaseExtension):
             )
             return
 
-        instance_names = [f"● {instance.data_dir_name}" for instance in mr_instances]
+        instance_names = [
+            f"● {instance.service_file_path.name}" for instance in mr_instances
+        ]
         Logger.print_dialog(
             DialogType.INFO,
             [
@@ -70,37 +74,33 @@ class TelegramBotExtension(BaseExtension):
         create_example_cfg = get_confirm("Create example telegram.conf?")
 
         try:
-            git_clone_wrapper(TELEGRAM_BOT_REPO, TELEGRAM_BOT_DIR)
+            git_clone_wrapper(TG_BOT_REPO, TG_BOT_DIR)
             self._install_dependencies()
 
             # create and start services / create bot configs
             show_config_dialog = False
-            tb_im = InstanceManager(MoonrakerTelegramBot)
             tb_names = [mr_i.suffix for mr_i in mr_instances]
             for name in tb_names:
-                current_instance = MoonrakerTelegramBot(suffix=name)
+                instance = MoonrakerTelegramBot(suffix=name)
+                instance.create()
 
-                tb_im.current_instance = current_instance
-                tb_im.create_instance()
-                tb_im.enable_instance()
+                cmd_sysctl_service(instance.service_file_path.name, "enable")
 
                 if create_example_cfg:
                     Logger.print_status(
-                        f"Creating Telegram Bot config in {current_instance.cfg_dir} ..."
+                        f"Creating Telegram Bot config in {instance.base.cfg_dir} ..."
                     )
-                    template = TELEGRAM_BOT_DIR.joinpath(
-                        "scripts/base_install_template"
-                    )
-                    target_file = current_instance.cfg_file
+                    template = TG_BOT_DIR.joinpath("scripts/base_install_template")
+                    target_file = instance.cfg_file
                     if not target_file.exists():
                         show_config_dialog = True
                         run(["cp", template, target_file], check=True)
                     else:
                         Logger.print_info(
-                            f"Telegram Bot config in {current_instance.cfg_dir} already exists! Skipped ..."
+                            f"Telegram Bot config in {instance.base.cfg_dir} already exists! Skipped ..."
                         )
 
-                tb_im.start_instance()
+                cmd_sysctl_service(instance.service_file_path.name, "start")
 
             cmd_sysctl_manage("daemon-reload")
 
@@ -108,7 +108,7 @@ class TelegramBotExtension(BaseExtension):
             self._patch_bot_update_manager(mr_instances)
 
             # restart moonraker
-            mr_im.restart_all_instance()
+            InstanceManager.restart_all(mr_instances)
 
             if show_config_dialog:
                 Logger.print_dialog(
@@ -120,6 +120,7 @@ class TelegramBotExtension(BaseExtension):
                         "following wiki page for further information:",
                         "https://github.com/nlef/moonraker-telegram-bot/wiki",
                     ],
+                    margin_bottom=1,
                 )
 
             Logger.print_ok("Telegram Bot installation complete!")
@@ -130,23 +131,23 @@ class TelegramBotExtension(BaseExtension):
 
     def update_extension(self, **kwargs) -> None:
         Logger.print_status("Updating Moonraker Telegram Bot ...")
-        tb_im = InstanceManager(MoonrakerTelegramBot)
-        tb_im.stop_all_instance()
 
-        git_pull_wrapper(TELEGRAM_BOT_REPO, TELEGRAM_BOT_DIR)
+        instances = get_instances(MoonrakerTelegramBot)
+        InstanceManager.stop_all(instances)
+
+        git_pull_wrapper(TG_BOT_REPO, TG_BOT_DIR)
         self._install_dependencies()
 
-        tb_im.start_all_instance()
+        InstanceManager.start_all(instances)
 
     def remove_extension(self, **kwargs) -> None:
         Logger.print_status("Removing Moonraker Telegram Bot ...")
-        mr_im = InstanceManager(Moonraker)
-        mr_instances: List[Moonraker] = mr_im.instances
-        tb_im = InstanceManager(MoonrakerTelegramBot)
-        tb_instances: List[MoonrakerTelegramBot] = tb_im.instances
+
+        mr_instances: List[Moonraker] = get_instances(Moonraker)
+        tb_instances: List[MoonrakerTelegramBot] = get_instances(MoonrakerTelegramBot)
 
         try:
-            self._remove_bot_instances(tb_im, tb_instances)
+            self._remove_bot_instances(tb_instances)
             self._remove_bot_dir()
             self._remove_bot_env()
             remove_config_section("update_manager moonraker-telegram-bot", mr_instances)
@@ -158,24 +159,23 @@ class TelegramBotExtension(BaseExtension):
 
     def _install_dependencies(self) -> None:
         # install dependencies
-        script = TELEGRAM_BOT_DIR.joinpath("scripts/install.sh")
+        script = TG_BOT_DIR.joinpath("scripts/install.sh")
         package_list = parse_packages_from_file(script)
-        check_install_dependencies(package_list)
+        check_install_dependencies({*package_list})
 
         # create virtualenv
-        create_python_venv(TELEGRAM_BOT_ENV)
-        requirements = TELEGRAM_BOT_DIR.joinpath("scripts/requirements.txt")
-        install_python_requirements(TELEGRAM_BOT_ENV, requirements)
+        if create_python_venv(TG_BOT_ENV):
+            install_python_requirements(TG_BOT_ENV, TG_BOT_REQ_FILE)
 
     def _patch_bot_update_manager(self, instances: List[Moonraker]) -> None:
-        env_py = f"{TELEGRAM_BOT_ENV}/bin/python"
+        env_py = f"{TG_BOT_ENV}/bin/python"
         add_config_section(
             section="update_manager moonraker-telegram-bot",
             instances=instances,
             options=[
                 ("type", "git_repo"),
-                ("path", str(TELEGRAM_BOT_DIR)),
-                ("orgin", TELEGRAM_BOT_REPO),
+                ("path", str(TG_BOT_DIR)),
+                ("origin", TG_BOT_REPO),
                 ("env", env_py),
                 ("requirements", "scripts/requirements.txt"),
                 ("install_script", "scripts/install.sh"),
@@ -184,44 +184,38 @@ class TelegramBotExtension(BaseExtension):
 
     def _remove_bot_instances(
         self,
-        instance_manager: InstanceManager,
         instance_list: List[MoonrakerTelegramBot],
     ) -> None:
         for instance in instance_list:
             Logger.print_status(
-                f"Removing instance {instance.get_service_file_name()} ..."
+                f"Removing instance {instance.service_file_path.stem} ..."
             )
-            instance_manager.current_instance = instance
-            instance_manager.stop_instance()
-            instance_manager.disable_instance()
-            instance_manager.delete_instance()
-
-        cmd_sysctl_manage("daemon-reload")
+            InstanceManager.remove(instance)
 
     def _remove_bot_dir(self) -> None:
-        if not TELEGRAM_BOT_DIR.exists():
-            Logger.print_info(f"'{TELEGRAM_BOT_DIR}' does not exist. Skipped ...")
+        if not TG_BOT_DIR.exists():
+            Logger.print_info(f"'{TG_BOT_DIR}' does not exist. Skipped ...")
             return
 
         try:
-            shutil.rmtree(TELEGRAM_BOT_DIR)
+            shutil.rmtree(TG_BOT_DIR)
         except OSError as e:
-            Logger.print_error(f"Unable to delete '{TELEGRAM_BOT_DIR}':\n{e}")
+            Logger.print_error(f"Unable to delete '{TG_BOT_DIR}':\n{e}")
 
     def _remove_bot_env(self) -> None:
-        if not TELEGRAM_BOT_ENV.exists():
-            Logger.print_info(f"'{TELEGRAM_BOT_ENV}' does not exist. Skipped ...")
+        if not TG_BOT_ENV.exists():
+            Logger.print_info(f"'{TG_BOT_ENV}' does not exist. Skipped ...")
             return
 
         try:
-            shutil.rmtree(TELEGRAM_BOT_ENV)
+            shutil.rmtree(TG_BOT_ENV)
         except OSError as e:
-            Logger.print_error(f"Unable to delete '{TELEGRAM_BOT_ENV}':\n{e}")
+            Logger.print_error(f"Unable to delete '{TG_BOT_ENV}':\n{e}")
 
     def _delete_bot_logs(self, instances: List[MoonrakerTelegramBot]) -> None:
         all_logfiles = []
         for instance in instances:
-            all_logfiles = list(instance.log_dir.glob("telegram_bot.log*"))
+            all_logfiles = list(instance.base.log_dir.glob("telegram_bot.log*"))
         if not all_logfiles:
             Logger.print_info("No Moonraker Telegram Bot logs found. Skipped ...")
             return

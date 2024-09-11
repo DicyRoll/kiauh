@@ -18,18 +18,19 @@ from components.klipper_firmware.flash_options import (
     FlashOptions,
 )
 from core.instance_manager.instance_manager import InstanceManager
-from utils.logger import Logger
+from core.logger import Logger
+from utils.instance_utils import get_instances
 from utils.sys_utils import log_process
 
 
 def find_firmware_file() -> bool:
     target = KLIPPER_DIR.joinpath("out")
-    target_exists = target.exists()
+    target_exists: bool = target.exists()
 
     f1 = "klipper.elf.hex"
     f2 = "klipper.elf"
     f3 = "klipper.bin"
-    fw_file_exists = (
+    fw_file_exists: bool = (
         target.joinpath(f1).exists() and target.joinpath(f2).exists()
     ) or target.joinpath(f3).exists()
 
@@ -75,10 +76,11 @@ def get_sd_flash_board_list() -> List[str]:
 
     try:
         cmd = f"{SD_FLASH_SCRIPT} -l"
-        blist = check_output(cmd, shell=True, text=True)
-        return blist.splitlines()[1:]
+        blist: List[str] = check_output(cmd, shell=True, text=True).splitlines()[1:]
+        return blist
     except CalledProcessError as e:
         Logger.print_error(f"An unexpected error occured:\n{e}")
+        return []
 
 
 def start_flash_process(flash_options: FlashOptions) -> None:
@@ -116,13 +118,13 @@ def start_flash_process(flash_options: FlashOptions) -> None:
         else:
             raise Exception("Invalid value for flash_method!")
 
-        instance_manager = InstanceManager(Klipper)
-        instance_manager.stop_all_instance()
+        instances = get_instances(Klipper)
+        InstanceManager.stop_all(instances)
 
         process = Popen(cmd, cwd=KLIPPER_DIR, stdout=PIPE, stderr=STDOUT, text=True)
         log_process(process)
 
-        instance_manager.start_all_instance()
+        InstanceManager.start_all(instances)
 
         rc = process.returncode
         if rc != 0:
